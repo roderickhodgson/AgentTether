@@ -16,7 +16,7 @@ import type { Clock } from "@substreams/core/proto";
 import type { JsonObject } from "@bufbuild/protobuf";
 import { BlockEmitter } from "@substreams/node";
 import { createNodeTransport } from "@substreams/node/createNodeTransport";
-import { incrementEventsMatched } from "./db.js";
+import { meterAndCommit } from "./db.js";
 import { onEventsMatched } from "./settlementEngine.js";
 
 // Data-plane config (defaults mirrored in .env.example) — independent of the payment plane.
@@ -213,16 +213,23 @@ export async function startSubstreams(): Promise<never> {
         // Batch one UPDATE per intent per block — a downtime catch-up can carry ~150k
         // matches, and per-match writes would serialize into minutes of lag.
         for (const e of matches) byIntent.set(e.intentId, (byIntent.get(e.intentId) ?? 0) + 1);
+        if (byIntent.size === 0) {
+          await saveCursor(cursor, clock.number);
+          return;
+        }
+        // Atomic per block: metering and cursor commit or roll back together — a crash
+        // mid-block replays the block cleanly on restart instead of double-metering.
+        const metered = await meterAndCommit(byIntent, cursor, Number(clock.number));
         for (const [intentId, count] of byIntent) {
-          const updated = await incrementEventsMatched(intentId, count);
-          // Trigger the settlement engine exactly once per intent: only when this block
-          // crossed the counter from zero (eventsMatched - count === 0).
-          if (updated.eventsMatched - count === 0) await onEventsMatched(intentId);
+          const total = metered.get(intentId) ?? 0;
+          // Settlement engine fires strictly AFTER the commit (external side effects
+          // can't live inside the transaction), exactly once per intent: only when this
+          // block crossed the counter from zero (total - count === 0).
+          if (total - count === 0) await onEventsMatched(intentId);
           console.log(
-            `metered ${count} match(es) for intent ${intentId.slice(0, 8)}… → events_matched=${updated.eventsMatched}`,
+            `metered ${count} match(es) for intent ${intentId.slice(0, 8)}… → events_matched=${total}`,
           );
         }
-        await saveCursor(cursor, clock.number);
       });
       const result = await handle.done;
       blocksSeen = result.blocksSeen;
