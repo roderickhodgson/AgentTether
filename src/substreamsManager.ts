@@ -6,6 +6,8 @@ import type { Clock } from "@substreams/core/proto";
 import type { JsonObject } from "@bufbuild/protobuf";
 import { BlockEmitter } from "@substreams/node";
 import { createNodeTransport } from "@substreams/node/createNodeTransport";
+import { incrementEventsMatched } from "./db.js";
+import { onEventsMatched } from "./settlementEngine.js";
 
 const ENDPOINT = process.env.SUBSTREAMS_ENDPOINT ?? "https://mainnet.eth.streamingfast.io:443";
 const SPKG = process.env.SUBSTREAMS_SPKG ?? "vendor/erc20Transfers-v0.1.4.spkg";
@@ -32,6 +34,7 @@ type TransferEvent = {
 };
 
 type NormalizedEvent = {
+  intentId: string;
   chain: string;
   block: bigint;
   blockTimestamp: string;
@@ -68,6 +71,7 @@ async function matchTransfers(message: JsonObject | undefined, clock: Clock): Pr
         continue;
       }
       out.push({
+        intentId: intent.id,
         chain: process.env.DATA_CHAIN ?? "ethereum-mainnet",
         block: clock.number,
         blockTimestamp: blockTimestamp(clock),
@@ -167,8 +171,10 @@ export async function startSubstreams(): Promise<never> {
         blocksSeen += 1;
         const matches = await matchTransfers(message, clock);
         for (const e of matches) {
+          const updated = await incrementEventsMatched(e.intentId);
+          if (updated.eventsMatched === 1) await onEventsMatched(e.intentId);
           console.log(
-            `MATCH block ${e.block} · ${e.contract.slice(0, 10)}… · amount ${e.amount} · tx ${e.txHash.slice(0, 14)}… · ${e.blockTimestamp}`,
+            `MATCH intent ${e.intentId.slice(0, 8)}… block ${e.block} · amount ${e.amount} · tx ${e.txHash.slice(0, 14)}… · ${e.blockTimestamp} · metered=${updated.eventsMatched}`,
           );
         }
         await saveCursor(cursor, clock.number);
