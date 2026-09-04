@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
-    "smoke": "tsx src/smoke.ts"
+    "smoke": "tsx src/smoke.ts",
+    "fixture": "tsx src/fixture.ts"
   },
   "repository": {
     "type": "git",
