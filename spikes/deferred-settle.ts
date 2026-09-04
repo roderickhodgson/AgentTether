@@ -167,8 +167,14 @@ async function main() {
     }
   }
 
-  const verification: VerifyResponse = await facilitator.verify(payload, requirements);
+  let verification: VerifyResponse = await facilitator.verify(payload, requirements);
   log("verify (amount = ceiling)", verification);
+  if (!verification.isValid && /permit2_allowance/i.test(verification.invalidReason ?? "")) {
+    console.log("\nallowance race detected — re-verifying once after 2s ...");
+    await sleep(2);
+    verification = await facilitator.verify(payload, requirements);
+    log("verify retry after allowance race", verification);
+  }
   if (!verification.isValid) {
     console.error("VERIFY FAILED — aborting before settle");
     process.exit(1);
