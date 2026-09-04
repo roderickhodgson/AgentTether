@@ -1,3 +1,13 @@
+/**
+ * Data plane: live Substreams consumer (the docs' "Direct Streaming" pattern).
+ *
+ * Streams the vendored ERC-20 transfers package from a hosted Substreams endpoint,
+ * matches each block's transfers against active MONITORING intents (contract + min
+ * amount + TTL), meters matches into `events_matched`, persists the stream cursor to
+ * Postgres for crash/resume safety, and hands each intent's first match to the
+ * settlement engine. Runs standalone (`npm run stream`) or via `startSubstreams()`
+ * from the Express entrypoint.
+ */
 import "dotenv/config";
 import { pathToFileURL } from "node:url";
 import { readPackageFromFile } from "@substreams/manifest";
@@ -9,20 +19,25 @@ import { createNodeTransport } from "@substreams/node/createNodeTransport";
 import { incrementEventsMatched } from "./db.js";
 import { onEventsMatched } from "./settlementEngine.js";
 
+// Data-plane config (defaults mirrored in .env.example) — independent of the payment plane.
 const ENDPOINT = process.env.SUBSTREAMS_ENDPOINT ?? "https://mainnet.eth.streamingfast.io:443";
 const SPKG = process.env.SUBSTREAMS_SPKG ?? "vendor/erc20Transfers-v0.1.4.spkg";
 const OUTPUT_MODULE = process.env.SUBSTREAMS_MODULE ?? "map_transfers";
 const API_KEY = process.env.SUBSTREAMS_API_KEY ?? "";
 
-const RESTART_HEAD_OFFSET = -12;
-const MAX_BACKOFF_MS = 30_000;
-const MAX_EMPTY_ATTEMPTS = 5;
+const RESTART_HEAD_OFFSET = -12; // fresh-start position: 12 blocks behind head (negative = relative)
+const MAX_BACKOFF_MS = 30_000; // reconnect backoff ceiling
+const MAX_EMPTY_ATTEMPTS = 5; // consecutive no-data attempts before giving up (auth/endpoint failure guard)
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 type StreamHandle = { stop: () => void; done: Promise<{ blocksSeen: number }> };
+// Shared mutable state: `lastCursor` is updated synchronously in stream event handlers,
+// so a restart always resumes from the newest block even while DB writes are still in flight.
 type StreamState = { lastCursor?: string };
 
+// Wire shape of `erc20.types.v1.TransferEvent` from the vendored Pinax spkg. Hex fields
+// arrive lowercase without a `0x` prefix; uint64 fields decode as strings in JSON.
 type TransferEvent = {
   contract: string;
   from: string;
@@ -58,6 +73,9 @@ async function matchTransfers(message: JsonObject | undefined, clock: Clock): Pr
   const intents = await getMonitoringIntents();
   if (intents.length === 0) return [];
 
+  // Block time comes from the stream's Clock (not the events) and drives the TTL guard:
+  // during downtime catch-up, replayed blocks that postdate an intent's ttl_timestamp
+  // must not meter. An absent timestamp leaves the guard open (safe default).
   const blockTime = new Date(blockTimestamp(clock));
   const blockTimeValid = !Number.isNaN(blockTime.getTime());
 
@@ -65,10 +83,13 @@ async function matchTransfers(message: JsonObject | undefined, clock: Clock): Pr
   const out: NormalizedEvent[] = [];
   for (const t of transfers) {
     for (const intent of intents) {
+      // TTL guard: never meter events for an intent whose window has closed.
       if (blockTimeValid && blockTime > intent.ttlTimestamp) continue;
       if (normalizeHex(t.contract) !== normalizeHex(intent.targetContract)) continue;
       const minAmount = (intent.eventCondition as { minAmount?: string } | null)?.minAmount;
       if (!minAmount) continue;
+      // minAmount is a string in atomic units; a malformed value disables matching
+      // for the intent rather than crashing the stream.
       try {
         if (BigInt(t.value) < BigInt(minAmount)) continue;
       } catch {
@@ -101,6 +122,8 @@ async function runStream(
     substreamPackage: pkg,
     outputModule: OUTPUT_MODULE,
     productionMode: true,
+    // finalBlocksOnly delays first delivery by up to ~13 min on Ethereum (finality), so
+    // head streaming is the default; undo signals (below) cover the tiny reorg window.
     finalBlocksOnly: process.env.SUBSTREAMS_FINAL_BLOCKS_ONLY === "true",
     ...(state.lastCursor ? { startCursor: state.lastCursor } : { startBlockNum: RESTART_HEAD_OFFSET }),
   });
@@ -116,6 +139,9 @@ async function runStream(
     rejectDone = rej;
   });
 
+  // Serialized write queue: cursor + metering writes must complete in block order, or an
+  // out-of-order flush could persist an older cursor (→ duplicate processing after a
+  // restart). `close` drains the chain before resolving, so no write is lost mid-restart.
   let writeChain = Promise.resolve();
 
   emitter.on("session", (session) => {
@@ -132,6 +158,8 @@ async function runStream(
       .catch((e) => console.error("onBlock failed:", e));
   });
   emitter.on("undo", (undo) => {
+    // Chain reorg: resume from the last valid block. Metered counters are NOT rolled
+    // back (demo-adequate — an undoed match may leave an off-by-one in events_matched).
     console.log(`undo signal — reverting cursor to last valid block`);
     state.lastCursor = undo.lastValidCursor;
     writeChain = writeChain
@@ -182,9 +210,13 @@ export async function startSubstreams(): Promise<never> {
           );
         }
         const byIntent = new Map<string, number>();
+        // Batch one UPDATE per intent per block — a downtime catch-up can carry ~150k
+        // matches, and per-match writes would serialize into minutes of lag.
         for (const e of matches) byIntent.set(e.intentId, (byIntent.get(e.intentId) ?? 0) + 1);
         for (const [intentId, count] of byIntent) {
           const updated = await incrementEventsMatched(intentId, count);
+          // Trigger the settlement engine exactly once per intent: only when this block
+          // crossed the counter from zero (eventsMatched - count === 0).
           if (updated.eventsMatched - count === 0) await onEventsMatched(intentId);
           console.log(
             `metered ${count} match(es) for intent ${intentId.slice(0, 8)}… → events_matched=${updated.eventsMatched}`,
@@ -205,6 +237,9 @@ export async function startSubstreams(): Promise<never> {
       emptyAttempts += 1;
       if (resuming) {
         failuresOnCursor += 1;
+        // A cursor is bound to the module hash — a spkg upgrade invalidates it. After
+        // repeated resume failures, fall back to a head start (misses downtime events;
+        // that is the correct recovery for an upgraded package).
         if (failuresOnCursor >= 3) {
           console.error("resume keeps failing — wiping cursor and restarting from head");
           await clearCursor();
@@ -238,6 +273,7 @@ async function clearCursor() {
   await wipe();
 }
 
+// Standalone entrypoint (`npm run stream`); the Express server calls startSubstreams().
 const isMain = process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url;
 if (isMain) {
   startSubstreams().catch((e) => {
