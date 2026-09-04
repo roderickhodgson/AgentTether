@@ -8,8 +8,11 @@ import {
   prisma,
 } from "./db.js";
 
+const agentWallet = process.env.AGENT_WALLET;
+if (!agentWallet) throw new Error("AGENT_WALLET is required in .env (demo agent wallet address)");
+
 const intent = await createIntent({
-  agentWallet: "REDACTED_AGENT_WALLET",
+  agentWallet,
   targetContract: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
   ttlTimestamp: new Date(Date.now() - 1000),
   maxLimitAtomic: "5000000",

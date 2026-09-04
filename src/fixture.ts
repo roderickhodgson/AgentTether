@@ -2,10 +2,12 @@ import "dotenv/config";
 import { createIntent, storeVerifiedPayment, prisma } from "./db.js";
 
 const MAINNET_USDC = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
-const SPIKE_WALLET = "REDACTED_AGENT_WALLET";
+
+const agentWallet = process.env.AGENT_WALLET;
+if (!agentWallet) throw new Error("AGENT_WALLET is required in .env (demo agent wallet address)");
 
 const intent = await createIntent({
-  agentWallet: SPIKE_WALLET,
+  agentWallet,
   targetContract: MAINNET_USDC,
   ttlTimestamp: new Date(Date.now() + 30 * 60 * 1000),
   maxLimitAtomic: "5000000",
