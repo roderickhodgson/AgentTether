@@ -71,3 +71,7 @@ export async function saveCursor(cursor: string, blockNum: number) {
     update: { cursor, blockNum },
   });
 }
+
+export async function clearCursor() {
+  await prisma.substreamsCursor.deleteMany({});
+}

@@ -58,10 +58,14 @@ async function matchTransfers(message: JsonObject | undefined, clock: Clock): Pr
   const intents = await getMonitoringIntents();
   if (intents.length === 0) return [];
 
+  const blockTime = new Date(blockTimestamp(clock));
+  const blockTimeValid = !Number.isNaN(blockTime.getTime());
+
   const transfers = (message as { transfers?: TransferEvent[] } | undefined)?.transfers ?? [];
   const out: NormalizedEvent[] = [];
   for (const t of transfers) {
     for (const intent of intents) {
+      if (blockTimeValid && blockTime > intent.ttlTimestamp) continue;
       if (normalizeHex(t.contract) !== normalizeHex(intent.targetContract)) continue;
       const minAmount = (intent.eventCondition as { minAmount?: string } | null)?.minAmount;
       if (!minAmount) continue;
@@ -164,17 +168,26 @@ export async function startSubstreams(): Promise<never> {
 
   let backoffMs = 1000;
   let emptyAttempts = 0;
+  let failuresOnCursor = 0;
   for (;;) {
+    const resuming = Boolean(state.lastCursor);
     try {
       let blocksSeen = 0;
       const handle = await runStream(state, async (message, cursor, clock) => {
         blocksSeen += 1;
         const matches = await matchTransfers(message, clock);
         for (const e of matches) {
-          const updated = await incrementEventsMatched(e.intentId);
-          if (updated.eventsMatched === 1) await onEventsMatched(e.intentId);
           console.log(
-            `MATCH intent ${e.intentId.slice(0, 8)}… block ${e.block} · amount ${e.amount} · tx ${e.txHash.slice(0, 14)}… · ${e.blockTimestamp} · metered=${updated.eventsMatched}`,
+            `MATCH intent ${e.intentId.slice(0, 8)}… block ${e.block} · log ${e.logIndex} · amount ${e.amount} · tx ${e.txHash.slice(0, 14)}… · ${e.blockTimestamp}`,
+          );
+        }
+        const byIntent = new Map<string, number>();
+        for (const e of matches) byIntent.set(e.intentId, (byIntent.get(e.intentId) ?? 0) + 1);
+        for (const [intentId, count] of byIntent) {
+          const updated = await incrementEventsMatched(intentId, count);
+          if (updated.eventsMatched - count === 0) await onEventsMatched(intentId);
+          console.log(
+            `metered ${count} match(es) for intent ${intentId.slice(0, 8)}… → events_matched=${updated.eventsMatched}`,
           );
         }
         await saveCursor(cursor, clock.number);
@@ -182,6 +195,7 @@ export async function startSubstreams(): Promise<never> {
       const result = await handle.done;
       blocksSeen = result.blocksSeen;
       backoffMs = 1000;
+      failuresOnCursor = 0;
       emptyAttempts = blocksSeen > 0 ? 0 : emptyAttempts + 1;
       if (emptyAttempts >= MAX_EMPTY_ATTEMPTS) {
         throw new Error(`${MAX_EMPTY_ATTEMPTS} consecutive attempts with no blocks — giving up`);
@@ -189,6 +203,15 @@ export async function startSubstreams(): Promise<never> {
       console.log(`stream ended after ${blocksSeen} blocks — retrying in ${backoffMs}ms`);
     } catch (e) {
       emptyAttempts += 1;
+      if (resuming) {
+        failuresOnCursor += 1;
+        if (failuresOnCursor >= 3) {
+          console.error("resume keeps failing — wiping cursor and restarting from head");
+          await clearCursor();
+          state.lastCursor = undefined;
+          failuresOnCursor = 0;
+        }
+      }
       if (emptyAttempts >= MAX_EMPTY_ATTEMPTS) {
         throw e;
       }
@@ -208,6 +231,11 @@ async function getSavedCursor() {
 async function saveCursor(cursor: string, blockNum: bigint) {
   const { saveCursor: persist } = await import("./db.js");
   await persist(cursor, Number(blockNum));
+}
+
+async function clearCursor() {
+  const { clearCursor: wipe } = await import("./db.js");
+  await wipe();
 }
 
 const isMain = process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url;
