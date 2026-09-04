@@ -2,6 +2,8 @@ import "dotenv/config";
 import { pathToFileURL } from "node:url";
 import { readPackageFromFile } from "@substreams/manifest";
 import { createRegistry, createRequest } from "@substreams/core";
+import type { Clock } from "@substreams/core/proto";
+import type { JsonObject } from "@bufbuild/protobuf";
 import { BlockEmitter } from "@substreams/node";
 import { createNodeTransport } from "@substreams/node/createNodeTransport";
 
@@ -19,9 +21,71 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 type StreamHandle = { stop: () => void; done: Promise<{ blocksSeen: number }> };
 type StreamState = { lastCursor?: string };
 
+type TransferEvent = {
+  contract: string;
+  from: string;
+  to: string;
+  value: string;
+  txId: string;
+  blockIndex: string;
+  index: number;
+};
+
+type NormalizedEvent = {
+  chain: string;
+  block: bigint;
+  blockTimestamp: string;
+  txHash: string;
+  logIndex: number;
+  contract: string;
+  from: string;
+  to: string;
+  amount: string;
+};
+
+const normalizeHex = (h: string) => h.toLowerCase().replace(/^0x/, "");
+
+function blockTimestamp(clock: Clock): string {
+  const ts = clock.timestamp;
+  return ts?.seconds != null ? new Date(Number(ts.seconds) * 1000).toISOString() : "";
+}
+
+async function matchTransfers(message: JsonObject | undefined, clock: Clock): Promise<NormalizedEvent[]> {
+  const { getMonitoringIntents } = await import("./db.js");
+  const intents = await getMonitoringIntents();
+  if (intents.length === 0) return [];
+
+  const transfers = (message as { transfers?: TransferEvent[] } | undefined)?.transfers ?? [];
+  const out: NormalizedEvent[] = [];
+  for (const t of transfers) {
+    for (const intent of intents) {
+      if (normalizeHex(t.contract) !== normalizeHex(intent.targetContract)) continue;
+      const minAmount = (intent.eventCondition as { minAmount?: string } | null)?.minAmount;
+      if (!minAmount) continue;
+      try {
+        if (BigInt(t.value) < BigInt(minAmount)) continue;
+      } catch {
+        continue;
+      }
+      out.push({
+        chain: process.env.DATA_CHAIN ?? "ethereum-mainnet",
+        block: clock.number,
+        blockTimestamp: blockTimestamp(clock),
+        txHash: normalizeHex(t.txId),
+        logIndex: Number(t.blockIndex ?? 0),
+        contract: normalizeHex(t.contract),
+        from: normalizeHex(t.from),
+        to: normalizeHex(t.to),
+        amount: t.value,
+      });
+    }
+  }
+  return out;
+}
+
 async function runStream(
   state: StreamState,
-  onBlock: (cursor: string, blockNum: bigint) => Promise<void>,
+  onBlock: (message: JsonObject | undefined, cursor: string, clock: Clock) => Promise<void>,
 ): Promise<StreamHandle> {
   const pkg = await readPackageFromFile(SPKG);
   const registry = createRegistry(pkg);
@@ -55,8 +119,9 @@ async function runStream(
   emitter.on("anyMessage", (message, cursor, clock) => {
     blocksSeen += 1;
     state.lastCursor = cursor;
-    console.log(`block ${clock.number} · ${message ? "decoded" : "empty"}`);
-    writeChain = writeChain.then(() => onBlock(cursor, clock.number)).catch((e) => console.error("onBlock failed:", e));
+    writeChain = writeChain
+      .then(() => onBlock(message, cursor, clock))
+      .catch((e) => console.error("onBlock failed:", e));
   });
   emitter.on("undo", (undo) => {
     console.log(`undo signal — reverting cursor to last valid block`);
@@ -98,9 +163,15 @@ export async function startSubstreams(): Promise<never> {
   for (;;) {
     try {
       let blocksSeen = 0;
-      const handle = await runStream(state, async (cursor, blockNum) => {
+      const handle = await runStream(state, async (message, cursor, clock) => {
         blocksSeen += 1;
-        await saveCursor(cursor, blockNum);
+        const matches = await matchTransfers(message, clock);
+        for (const e of matches) {
+          console.log(
+            `MATCH block ${e.block} · ${e.contract.slice(0, 10)}… · amount ${e.amount} · tx ${e.txHash.slice(0, 14)}… · ${e.blockTimestamp}`,
+          );
+        }
+        await saveCursor(cursor, clock.number);
       });
       const result = await handle.done;
       blocksSeen = result.blocksSeen;
