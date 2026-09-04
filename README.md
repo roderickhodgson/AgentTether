@@ -16,6 +16,102 @@ AgentTether lets autonomous AI agents provision and pay for conditional, asynchr
 
 ---
 
+## 🗺️ System Architecture
+
+> Three views: the components and the deliberate two-plane split, the end-to-end metered flow (demo beat A), and the intent lifecycle (the `status` enum from Phase 1). Note the **absence of any edge between the data plane and the payment plane** — they are independent by design.
+
+### Components — data plane vs payment plane
+
+```mermaid
+flowchart TB
+    subgraph Agent["🤖 AI Agent Client — Python, LangGraph/Pydantic"]
+        direction LR
+        Graph["Agent graph<br/>request_data_stream · sign_and_retry"]
+        Wallet["Local EVM wallet<br/>Permit2 EIP-712 signing"]
+        Flask["Flask webhook receiver"]
+    end
+
+    subgraph Backend["🪝 AgentTether Backend — Node.js / Express / TS"]
+        direction TB
+        API["x402 API layer<br/>POST /api/v1/intents/stream · /oneshot"]
+        Stream["substreamsManager.ts<br/>in-process BlockEmitter · reconnect loop"]
+        Engine["settlementEngine.ts<br/>metered settle · TTL cron"]
+        DB[("Neon Postgres via Prisma<br/>intents · payment_payload · SubstreamsCursor")]
+    end
+
+    subgraph DataPlane["📡 Data Plane — Ethereum/Base mainnet · real events"]
+        SPKG["Published ERC-20 transfers .spkg"]
+        EP["Substreams endpoint<br/>mainnet.eth.streamingfast.io"]
+    end
+
+    subgraph PaymentPlane["💸 Payment Plane — testnet only"]
+        FAC["Default facilitator — x402.org/facilitator<br/>upto · eip155:84532 · hedera fallback"]
+        BLOCKY["Blocky402 facilitator<br/>exact · hedera:testnet · feePayer"]
+        BASE["Base Sepolia<br/>x402UptoPermit2Proxy.settle(actual)"]
+        HEDERA["Hedera testnet<br/>HBAR TransferTransaction"]
+    end
+
+    Graph -->|"POST intent → 402 → sign → PAYMENT-SIGNATURE"| API
+    API -->|"202 + job_id"| Graph
+    API --> DB
+    Stream -->|"commit cursor"| DB
+    EP -->|"gRPC blocks · final only"| Stream
+    SPKG -.->|"static input"| EP
+    Stream -->|"match event_condition → events_matched++"| Engine
+    API -->|"verify (once, deferred settle)"| FAC
+    Engine -->|"/settle (partial amount, minutes later)"| FAC
+    FAC --> BASE
+    API -->|"/verify + /settle (exact, oneshot)"| BLOCKY
+    BLOCKY --> HEDERA
+    Engine -->|"webhook: data + {txHash, amountCharged}"| Flask
+```
+
+### End-to-end metered flow (demo beat A)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor A as AI Agent (LangGraph)
+    participant API as AgentTether API
+    participant F as Facilitator (x402.org)
+    participant S as Substreams endpoint (mainnet)
+    participant W as Agent webhook (Flask)
+
+    A->>API: POST /api/v1/intents/stream (condition, ttl)
+    API-->>A: 402 PAYMENT-REQUIRED (upto · max_limit · facilitatorAddress)
+    Note over A: build Permit2 permitWitnessTransferFrom<br/>witness binds facilitator · sign EIP-712
+    A->>API: retry + PAYMENT-SIGNATURE header
+    API->>F: /verify (signature · balance · allowance)
+    F-->>API: voucher valid
+    Note over API: store payment_payload · status=MONITORING<br/>activateMonitoring(intentId)
+    API-->>A: 202 Accepted (job_id)
+    S->>API: block stream (in-process · finalBlocksOnly)
+    Note over API: USDC transfer matches condition<br/>events_matched++ → settlement due
+    API->>F: /settle (actual = events_matched × rate ≤ max_limit)
+    Note over F: re-verify against signed ceiling<br/>x402UptoPermit2Proxy.settle(actual)
+    F-->>API: {txHash, amountCharged}
+    API-->>W: normalized data + settlement receipt
+    Note over API: status=SETTLED
+```
+
+### Intent lifecycle (metered stream endpoint)
+
+Scoped to `/api/v1/intents/stream` only — the `/oneshot` Hedera flow is flat-fee, creates no intent, and has no lifecycle states.
+
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING_PAYMENT: POST /intents/stream (402 issued)
+    PENDING_PAYMENT --> MONITORING: voucher verified · activateMonitoring
+    MONITORING --> SETTLED: condition fired → /settle(actual)
+    MONITORING --> TIMEOUT: TTL expired (cron) → metered or $0
+    MONITORING --> SETTLE_FAILED: /settle rejected (drained balance)
+    SETTLED --> [*]: webhook + {txHash, amountCharged}
+    TIMEOUT --> [*]: webhook notification
+    SETTLE_FAILED --> [*]: honest failure state
+```
+
+---
+
 ## 🏗 Implementation Checklist 
 
 ### Phase 1: Database & Escrow State Management
