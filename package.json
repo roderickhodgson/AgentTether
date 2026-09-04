@@ -1,0 +1,47 @@
+{
+  "name": "agenttether",
+  "version": "0.1.0",
+  "description": "**ETHOnline 2026 Hackathon** | **Category:** Artificial Intelligence | **Tracks:** The Graph (Best AI Tooling), Hedera (AI & Agentic Payments)",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "db:push": "prisma db push",
+    "db:studio": "prisma studio",
+    "smoke": "tsx src/smoke.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/roderickhodgson/AgentTether.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/roderickhodgson/AgentTether/issues"
+  },
+  "homepage": "https://github.com/roderickhodgson/AgentTether#readme",
+  "private": "true",
+  "dependencies": {
+    "@prisma/client": "^6.19.3",
+    "@substreams/core": "^0.17.0",
+    "@substreams/manifest": "^0.16.0",
+    "@substreams/node": "^0.7.2",
+    "@x402/core": "^2.25.0",
+    "@x402/evm": "^2.25.0",
+    "@x402/express": "^2.25.0",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "node-cron": "^4.6.0",
+    "prisma": "^6.19.3"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.4.1",
+    "tsx": "^4.23.13",
+    "typescript": "^5.9.3"
+  }
+}

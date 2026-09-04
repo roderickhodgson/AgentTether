@@ -1,0 +1,44 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum IntentStatus {
+  PENDING_PAYMENT
+  MONITORING
+  SETTLED
+  TIMEOUT
+  SETTLE_FAILED
+}
+
+model Intent {
+  id                 String       @id @default(uuid())
+  agentWallet        String       @map("agent_wallet")
+  targetContract     String       @map("target_contract")
+  ttlTimestamp       DateTime     @map("ttl_timestamp")
+  maxLimitAtomic     String       @map("max_limit_atomic")
+  ratePerEventAtomic String       @map("rate_per_event_atomic")
+  eventsMatched      Int          @default(0) @map("events_matched")
+  paymentNonce       String?      @unique @map("payment_nonce")
+  paymentPayload     Json?        @map("payment_payload")
+  eventCondition     Json         @map("event_condition")
+  status             IntentStatus @default(PENDING_PAYMENT)
+  webhookUrl         String?      @map("webhook_url")
+  createdAt          DateTime     @default(now()) @map("created_at")
+  updatedAt          DateTime     @updatedAt @map("updated_at")
+
+  @@map("intents")
+}
+
+model SubstreamsCursor {
+  id        String   @id @default("singleton")
+  cursor    String
+  blockNum  Int      @map("block_num")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("substreams_cursor")
+}
