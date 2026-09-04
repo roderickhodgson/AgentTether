@@ -5,6 +5,8 @@
 AgentTether lets autonomous AI agents provision and pay for conditional, asynchronous webhooks for future blockchain events — metered, escrow-free, and settled only for what actually fires. It is application-layer middleware bridging the **x402 HTTP payment standard** with **The Graph's Substreams**: instead of locking capital in smart contracts, agents sign metered, partial-fill cryptographic vouchers (Permit2 via the x402 `upto` scheme) that the Express backend holds until the condition is met or a Time-to-Live (TTL) expires — then settles only for the resources actually consumed.
 
 > **Demo architecture note (deliberate cross-chain split):** the **data plane** observes **Ethereum/Base mainnet** (organic USDC transfer velocity — real events, no scripted triggers), while the **payment plane** executes all x402 financial settlement safely on **Base Sepolia** testnet (plus Hedera testnet for the one-shot endpoint). The two planes are independent by design; this split should be acknowledged explicitly in the agent's system prompt and will be narrated in any demo video.
+>
+> **Why Base Sepolia for settlement?** It is the only chain the hosted default facilitator advertises for x402 v2 on EVM (`/supported`: `upto` and `exact` on `eip155:84532` only — Ethereum Sepolia and other L2s are absent), it has canonical Circle USDC, and it is the x402 ecosystem's first-class chain. The constraint is the settlement service's, not ours — which is exactly why the data plane is kept chain-agnostic: Substreams can observe any mainnet regardless of where settlement runs.
 
 ## 🛠 Tech Stack
 * **Backend API:** Node.js, Express, TypeScript.
