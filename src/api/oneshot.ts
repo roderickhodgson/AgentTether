@@ -14,6 +14,7 @@ import type { Express, Request, Response } from "express";
 import { HTTPFacilitatorClient } from "@x402/core/server";
 import { paymentMiddlewareFromConfig, type SchemeRegistration } from "@x402/express";
 import { ExactEvmScheme } from "@x402/evm/exact/server";
+import { ExactHederaScheme } from "@x402/hedera/exact/server";
 import { lookbackTransfers } from "../db.js";
 import { logger } from "../logger.js";
 import {
@@ -33,31 +34,37 @@ import {
 const ONESHOT_PATH = "/api/v1/intents/oneshot";
 const MAX_RESULT_LIMIT = 500;
 
-// Hedera rail: HBAR exact via the Blocky402 facilitator (bounty-mandated routing).
-// Gated on HEDERA_PAY_TO — without a receiving account there is nothing to route to.
-function hederaRail() {
+// HEDERA_PAY_TO accepts either form: a bare Hedera entity id (0.0.x — used as-is) or an
+// EVM address (0x… — resolved to its entity id via the testnet mirror node, since the
+// scheme/facilitator validate receivers against the entity-id form). Returns null while
+// the account doesn't exist yet (rail not advertised).
+async function resolveHederaPayTo(): Promise<string | null> {
   const payTo = process.env.HEDERA_PAY_TO ?? "";
   if (!payTo) return null;
-  return {
-    scheme: "exact" as const,
-    payTo,
-    price: {
-      asset: "HBAR",
-      amount: oneshotPriceHederaTinybars().toString(),
-      extra: { decimals: 8 },
-    },
-    network: "hedera:testnet" as const,
-    maxTimeoutSeconds: 60,
-  };
+  if (/^\d+\.\d+\.\d+$/.test(payTo)) return payTo;
+  try {
+    const res = await fetch(`https://testnet.mirrornode.hedera.com/api/v1/accounts/${payTo}`);
+    if (res.status === 404) {
+      logger.warn({ payTo }, "HEDERA_PAY_TO account does not exist on hedera:testnet yet — hedera rail not advertised");
+      return null;
+    }
+    const account = (await res.json()) as { account?: string };
+    if (!account.account) return null;
+    logger.info({ from: payTo, to: account.account }, "resolved HEDERA_PAY_TO to its Hedera entity id");
+    return account.account;
+  } catch (e) {
+    logger.error({ err: e instanceof Error ? e.message : e, payTo }, "mirror lookup for HEDERA_PAY_TO failed — hedera rail not advertised");
+    return null;
+  }
 }
 
-export function mountOneshot(app: Express): void {
+export async function mountOneshot(app: Express): Promise<void> {
   if (!PAY_TO_ADDRESS) {
     logger.warn("PAY_TO_ADDRESS unset — /oneshot not mounted");
     return;
   }
 
-  const hedera = hederaRail();
+  const hederaPayTo = await resolveHederaPayTo();
   const rails: unknown[] = [
     {
       scheme: "exact",
@@ -71,20 +78,26 @@ export function mountOneshot(app: Express): void {
       maxTimeoutSeconds: 60,
     },
   ];
-  if (hedera) rails.push(hedera);
+  const facilitators = [new HTTPFacilitatorClient({ url: FACILITATOR_URL })];
+  const schemes: SchemeRegistration[] = [{ network: NETWORK, server: new ExactEvmScheme() }];
+  if (hederaPayTo) {
+    rails.push({
+      scheme: "exact",
+      payTo: hederaPayTo,
+      price: {
+        asset: "0.0.0", // HBAR_ASSET_ID — HBAR in tinybars (8 decimals)
+        amount: oneshotPriceHederaTinybars().toString(),
+      },
+      network: "hedera:testnet",
+      maxTimeoutSeconds: 60,
+    });
+    facilitators.push(new HTTPFacilitatorClient({ url: HEDERA_FACILITATOR_URL }));
+    schemes.push({ network: "hedera:testnet", server: new ExactHederaScheme() });
+  }
   logger.info(
     { rails: rails.map((r) => (r as { network: string }).network) },
     "oneshot payment rails",
   );
-
-  // One facilitator client per rail; the resource server matches payments to the
-  // facilitator that supports their network (discover /supported at startup — never
-  // hardcode capabilities). Note: advertising the hedera option also requires its
-  // exact scheme server registration (@x402/hedera) — the hedera beat lands both
-  // together, keyed off HEDERA_PAY_TO.
-  const facilitators = [new HTTPFacilitatorClient({ url: FACILITATOR_URL })];
-  const schemes: SchemeRegistration[] = [{ network: NETWORK, server: new ExactEvmScheme() }];
-  if (hedera) facilitators.push(new HTTPFacilitatorClient({ url: HEDERA_FACILITATOR_URL }));
 
   const oneshotPayment = paymentMiddlewareFromConfig(
     {

@@ -13,7 +13,7 @@ app.use(express.json());
 // answers before the oneshot payment middleware sees the request; the oneshot handler
 // sits AFTER the middleware so it only runs on verified payment.
 app.use(intentsRouter);
-mountOneshot(app);
+await mountOneshot(app);
 
 app.get("/healthz", async (_req, res) => {
   try {
