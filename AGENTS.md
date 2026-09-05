@@ -27,6 +27,9 @@ Guidance for AI coding agents (and humans) working on this repo. The README is t
 | `npm run stream` | Runs the data-plane stream standalone (reconnect loop, cursor resume, metering) |
 | `npm run reset` | Demo reset: deletes all intents + the cursor (confirm prompt, `-- --force` to skip) so the next stream starts fresh from head |
 | `npm run wallet-check` | Read-only report: ETH/USDC balances + Permit2 allowance for `AGENT_WALLET` and `PAY_TO_ADDRESS` (plain JSON-RPC, no tx, no web3 dep) |
+| `npm test` | Fast vitest suite: pure units + mocked HTTP/orchestration — no DB, no chain, no money (matcher window semantics, engine triage, router branch table) |
+| `npm run test:integration` | DB-backed tests against the Neon **branch** (`TEST_DATABASE_URL` in `.env`) — isolated copy, safe to run during a live demo |
+| `npm run verify:live` | Pre-demo live verification: stream-client e2e + settlement e2e (needs `npm start` running; moves testnet USDC) |
 | `npm run dev` / `start` | Express backend (`/healthz`) |
 
 ## Architecture facts (rediscovering these is expensive)

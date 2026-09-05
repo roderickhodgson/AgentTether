@@ -256,6 +256,16 @@ The gap was exercised at 30s and 300s; both runs transferred exactly `1858` atom
 
 ---
 
+## 🧪 Testing
+
+Three layers, each with a different blast radius (run in this order of frequency):
+
+1. **`npm test` — fast suite (vitest, ~0.5s, no DB / chain / money):** pure units + mocked HTTP/orchestration, colocated as `*.test.ts`. Covers the matcher's window semantics (catch-up guards, TTL guard, malformed conditions), the engine's rejection triage (every fixture is a reason observed live against the hosted facilitator), amount capping, webhook truncation flags, the router's full 3.2/3.3 branch table via a real Express listener with `db.js`/`facilitator.js` mocked, and the engine's complete state machine (success, $0 timeout, deadline-void, structural, transient, uncertain, CAS no-op, receipt gate, webhook retries). Runs in CI on every push.
+2. **`npm run test:integration` — DB-backed, against the Neon *branch* (`TEST_DATABASE_URL`):** `meterAndCommit` (metering + bounded event capture + cursor in one commit, cap semantics, deleted-intent tolerance), the CAS claim's exactly-once behavior, nonce uniqueness and the recovery-set query membership. The branch is an isolated schema+data copy, so this is safe even while a live demo streams against the main database. Skips cleanly when `TEST_DATABASE_URL` is unset.
+3. **`npm run verify:live` — the money-moving layer (manual, pre-demo):** the spikes (`stream-client.ts` → `settlement-e2e.ts`) against the real chain, real facilitator and real testnet USDC. Deliberately never automated in CI.
+
+The suite has already paid for itself twice on its first day: it caught a settlement-triage regression (the facilitator's generic *"Missing or invalid parameters"* message tripping the `missing` structural keyword — which would have made the live-transient case terminal) and a NaN crash in the ceiling computation's pure path.
+
 ## ⚠️ Risk Register (ordered)
 
 1. **Deferred settlement (verify→settle time gap)** — ✅ **RESOLVED (Day 1 spike — see Spike Results):** the hosted default facilitator accepted a stored voucher settled after a 5-minute verify→settle gap, transferring exactly the partial amount on-chain via `x402UptoPermit2Proxy` ([tx](https://sepolia.basescan.org/tx/0x69c7f98a7f55b02fcfaf85a5ac446cb0df5ea8438209424eaf629b085b0eac71)). Negative tests passed per spec: settle-above-ceiling rejected; $0 settle succeeds with no on-chain transaction. Residual risk is operational only; self-hosting the facilitator (Apache-2.0) remains the degraded-mode fallback.
