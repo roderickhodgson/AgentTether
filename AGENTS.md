@@ -40,6 +40,9 @@ Guidance for AI coding agents (and humans) working on this repo. The README is t
 - **Facilitators:** default `https://x402.org/facilitator` (EVM + Hedera fallback); Blocky402 `https://api.testnet.blocky402.com` for Hedera (bounty-mandated routing). Discover `facilitatorAddress`/`feePayer` from `GET /supported` at startup — never hardcode.
 - The substreams CLI's `--endpoint` flag needs an explicit `:443` port suffix; the JS SDK does not.
 - Block timestamps come from the stream's `Clock`, not the transfer events.
+- **Single-writer rule (ops):** exactly one backend instance may stream against the DB — two instances double-*meter* (the Permit2 nonce still prevents double-*charge*).
+- **Permit2 allowance erodes:** the allowance-mode approval *decrements per settlement* — not "approve max once, forever". The client's per-run pre-check (`allowance ≥ ceiling`) re-bootstraps automatically.
+- **Facilitator settles can bounce transiently** (observed: stale wallet nonce / queue congestion on the hosted facilitator → `invalid_exact_evm_transaction_failed`). The engine's triage leaves such intents `SETTLING` and retries within the voucher's deadline window (ttl + 120s); only structural rejections go terminal.
 
 ## Docs-as-plan
 
