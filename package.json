@@ -12,7 +12,8 @@
     "db:studio": "prisma studio",
     "smoke": "tsx src/smoke.ts",
     "fixture": "tsx src/fixture.ts",
-    "stream": "tsx src/substreamsManager.ts"
+    "stream": "tsx src/substreamsManager.ts",
+    "reset": "tsx src/reset.ts"
   },
   "repository": {
     "type": "git",
