@@ -32,10 +32,16 @@ export async function storeVerifiedPayment(
   id: string,
   paymentNonce: string,
   paymentPayload: Prisma.InputJsonValue,
+  agentWallet?: string,
 ) {
   return prisma.intent.update({
     where: { id },
-    data: { paymentNonce, paymentPayload, status: "MONITORING" },
+    data: {
+      paymentNonce,
+      paymentPayload,
+      status: "MONITORING",
+      ...(agentWallet ? { agentWallet } : {}),
+    },
   });
 }
 
