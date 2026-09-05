@@ -1,5 +1,5 @@
-import { prisma } from "./db.js";
-import { logger } from "./logger.js";
+import { prisma } from "../db.js";
+import { logger } from "../logger.js";
 
 export async function onEventsMatched(intentId: string): Promise<void> {
   const intent = await prisma.intent.findUnique({ where: { id: intentId } });

@@ -6,7 +6,7 @@
  * Hedera kinds (exact + feePayer) are discovered the same way for the oneshot route.
  */
 import { HTTPFacilitatorClient } from "@x402/core/server";
-import { logger } from "./logger.js";
+import { logger } from "../logger.js";
 
 export const FACILITATOR_URL = process.env.FACILITATOR_URL ?? "https://x402.org/facilitator";
 export const HEDERA_FACILITATOR_URL = process.env.HEDERA_FACILITATOR_URL ?? "https://api.testnet.blocky402.com";

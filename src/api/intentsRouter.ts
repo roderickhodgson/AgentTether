@@ -17,9 +17,9 @@ import { encodePaymentRequiredHeader, decodePaymentSignatureHeader } from "@x402
 import type { PaymentPayload, PaymentRequired, PaymentRequirements } from "@x402/core/types";
 import type { Prisma } from "@prisma/client";
 import type { Request, Response } from "express";
-import { createIntent, getIntent, getIntentByPaymentNonce, storeVerifiedPayment } from "./db.js";
-import { discoverUpto, facilitator, NETWORK, USDC_ADDRESS, PAY_TO_ADDRESS } from "./facilitator.js";
-import { logger } from "./logger.js";
+import { createIntent, getIntent, getIntentByPaymentNonce, storeVerifiedPayment } from "../db.js";
+import { discoverUpto, facilitator, NETWORK, USDC_ADDRESS, PAY_TO_ADDRESS } from "../payments/facilitator.js";
+import { logger } from "../logger.js";
 
 // Permit2 deadlines must outlive the monitoring window: cron sweeps run every minute
 // (4.3) and settlement itself takes time, so require the voucher to be valid for the

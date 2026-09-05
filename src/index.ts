@@ -2,8 +2,8 @@ import "dotenv/config";
 import express from "express";
 import { prisma } from "./db.js";
 import { logger } from "./logger.js";
-import { intentsRouter } from "./intentsRouter.js";
-import { startSubstreams } from "./substreamsManager.js";
+import { intentsRouter } from "./api/intentsRouter.js";
+import { startSubstreams } from "./dataplane/substreamsManager.js";
 
 const app = express();
 app.use(express.json());

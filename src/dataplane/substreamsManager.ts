@@ -17,9 +17,9 @@ import type { Clock } from "@substreams/core/proto";
 import type { JsonObject } from "@bufbuild/protobuf";
 import { BlockEmitter } from "@substreams/node";
 import { createNodeTransport } from "@substreams/node/createNodeTransport";
-import { meterAndCommit } from "./db.js";
-import { onEventsMatched } from "./settlementEngine.js";
-import { logger } from "./logger.js";
+import { meterAndCommit } from "../db.js";
+import { onEventsMatched } from "../payments/settlementEngine.js";
+import { logger } from "../logger.js";
 
 // Data-plane config (defaults mirrored in .env.example) — independent of the payment plane.
 const ENDPOINT = process.env.SUBSTREAMS_ENDPOINT ?? "https://mainnet.eth.streamingfast.io:443";
@@ -92,7 +92,7 @@ function heartbeat(clock: Clock) {
 }
 
 async function matchTransfers(message: JsonObject | undefined, clock: Clock): Promise<NormalizedEvent[]> {
-  const { getMonitoringIntents } = await import("./db.js");
+  const { getMonitoringIntents } = await import("../db.js");
   const intents = await getMonitoringIntents();
   if (intents.length === 0) return [];
 
@@ -304,18 +304,18 @@ export async function startSubstreams(): Promise<never> {
 }
 
 async function getSavedCursor() {
-  const { getCursor } = await import("./db.js");
+  const { getCursor } = await import("../db.js");
   const row = await getCursor();
   return row?.cursor ?? null;
 }
 
 async function saveCursor(cursor: string, blockNum: bigint) {
-  const { saveCursor: persist } = await import("./db.js");
+  const { saveCursor: persist } = await import("../db.js");
   await persist(cursor, Number(blockNum));
 }
 
 async function clearCursor() {
-  const { clearCursor: wipe } = await import("./db.js");
+  const { clearCursor: wipe } = await import("../db.js");
   await wipe();
 }
 
