@@ -9,6 +9,9 @@ import {
   markSettled,
   markTimeout,
   getSettlementCandidates,
+  getCursor,
+  saveCursor,
+  clearCursor,
   meterAndCommit,
   prisma,
 } from "../db.js";
@@ -69,6 +72,10 @@ const timeoutIntent = await createIntent({
   eventCondition: { minAmount: "100000000000" },
 });
 await storeVerifiedPayment(timeoutIntent.id, "0xsmoke-nonce-timeout", { spike: true });
+// The cursor is SHARED state — a live stream resumes from it. Save it, run the
+// meterAndCommit lifecycle, then restore exactly what was there (delete if none) so
+// the smoke test can never poison the stream with a synthetic cursor value.
+const cursorBefore = await getCursor();
 await meterAndCommit(
   new Map([[timeoutIntent.id, 1]]),
   [{
@@ -85,6 +92,8 @@ await meterAndCommit(
   "0xsmoke-cursor",
   123,
 );
+if (cursorBefore) await saveCursor(cursorBefore.cursor, cursorBefore.blockNum);
+else await clearCursor();
 const candidates = await getSettlementCandidates();
 console.log(
   "recovery set:",
