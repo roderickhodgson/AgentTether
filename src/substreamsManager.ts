@@ -18,6 +18,7 @@ import { BlockEmitter } from "@substreams/node";
 import { createNodeTransport } from "@substreams/node/createNodeTransport";
 import { meterAndCommit } from "./db.js";
 import { onEventsMatched } from "./settlementEngine.js";
+import { logger } from "./logger.js";
 
 // Data-plane config (defaults mirrored in .env.example) — independent of the payment plane.
 const ENDPOINT = process.env.SUBSTREAMS_ENDPOINT ?? "https://mainnet.eth.streamingfast.io:443";
@@ -28,6 +29,8 @@ const API_KEY = process.env.SUBSTREAMS_API_KEY ?? "";
 const RESTART_HEAD_OFFSET = -12; // fresh-start position: 12 blocks behind head (negative = relative)
 const MAX_BACKOFF_MS = 30_000; // reconnect backoff ceiling
 const MAX_EMPTY_ATTEMPTS = 5; // consecutive no-data attempts before giving up (auth/endpoint failure guard)
+const HEARTBEAT_BLOCKS = 50n; // sampled progress log: at least this many blocks...
+const HEARTBEAT_MS = 30_000; // ...or this much wall time, whichever comes first
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -68,6 +71,25 @@ function blockTimestamp(clock: Clock): string {
   return ts?.seconds != null ? new Date(Number(ts.seconds) * 1000).toISOString() : "";
 }
 
+// Sampled progress heartbeat: the lag signal is chain-time-vs-wall-clock — seconds during
+// live tail, hours during catch-up. (ModulesProgress carries no usable head block.)
+let blocksSinceHeartbeat = 0n;
+let lastHeartbeatAt = 0;
+
+function heartbeat(clock: Clock) {
+  blocksSinceHeartbeat += 1n;
+  const now = Date.now();
+  if (blocksSinceHeartbeat < HEARTBEAT_BLOCKS && now - lastHeartbeatAt < HEARTBEAT_MS) return;
+  blocksSinceHeartbeat = 0n;
+  lastHeartbeatAt = now;
+  const chainMs = Number(clock.timestamp?.seconds ?? 0n) * 1000;
+  const behindMin = chainMs ? (now - chainMs) / 60000 : 0;
+  logger.info(
+    { block: clock.number.toString(), chainTime: new Date(chainMs).toISOString(), behindWallClockMin: Number(behindMin.toFixed(1)) },
+    `stream progress: block ${clock.number} · ${behindMin.toFixed(1)} min behind wall clock`,
+  );
+}
+
 async function matchTransfers(message: JsonObject | undefined, clock: Clock): Promise<NormalizedEvent[]> {
   const { getMonitoringIntents } = await import("./db.js");
   const intents = await getMonitoringIntents();
@@ -83,7 +105,7 @@ async function matchTransfers(message: JsonObject | undefined, clock: Clock): Pr
   const out: NormalizedEvent[] = [];
   for (const t of transfers) {
     for (const intent of intents) {
-      // TTL guard: never meter events for an intent whose window has closed.
+      // Window end guard (TTL): never meter events for an intent whose window has closed.
       if (blockTimeValid && blockTime > intent.ttlTimestamp) continue;
       if (normalizeHex(t.contract) !== normalizeHex(intent.targetContract)) continue;
       const minAmount = (intent.eventCondition as { minAmount?: string } | null)?.minAmount;
@@ -145,30 +167,28 @@ async function runStream(
   let writeChain = Promise.resolve();
 
   emitter.on("session", (session) => {
-    console.log(`session: traceId=${session.traceId} resolvedStart=${session.resolvedStartBlock}`);
-  });
-  emitter.on("progress", (p) => {
-    if (process.env.DEBUG_STREAM) console.log(`progress: ${JSON.stringify(p.toJson())}`);
+    logger.info({ traceId: session.traceId, resolvedStart: session.resolvedStartBlock.toString() }, "session started");
   });
   emitter.on("anyMessage", (message, cursor, clock) => {
     blocksSeen += 1;
     state.lastCursor = cursor;
+    heartbeat(clock);
     writeChain = writeChain
       .then(() => onBlock(message, cursor, clock))
-      .catch((e) => console.error("onBlock failed:", e));
+      .catch((e) => logger.error({ err: e }, "onBlock failed"));
   });
   emitter.on("undo", (undo) => {
     // Chain reorg: resume from the last valid block. Metered counters are NOT rolled
     // back (demo-adequate — an undoed match may leave an off-by-one in events_matched).
-    console.log(`undo signal — reverting cursor to last valid block`);
+    logger.warn({ lastValidCursor: undo.lastValidCursor.slice(0, 24) }, "undo signal — reverting cursor to last valid block");
     state.lastCursor = undo.lastValidCursor;
     writeChain = writeChain
       .then(() => saveCursor(undo.lastValidCursor, 0n))
-      .catch((e) => console.error("undo cursor save failed:", e));
+      .catch((e) => logger.error({ err: e }, "undo cursor save failed"));
   });
   emitter.on("close", (error) => {
     emitter.stop();
-    if (error) console.error("stream closed:", error.message);
+    if (error) logger.warn({ err: error.message }, "stream closed");
     writeChain.then(() => resolveDone({ blocksSeen }));
   });
   emitter.on("fatalError", (error) => {
@@ -190,8 +210,14 @@ async function runStream(
 export async function startSubstreams(): Promise<never> {
   if (!API_KEY) throw new Error("SUBSTREAMS_API_KEY is required");
   const state: StreamState = { lastCursor: (await getSavedCursor()) ?? undefined };
-  console.log(
-    `substreams: module=${OUTPUT_MODULE} endpoint=${ENDPOINT}\n  spkg: ${SPKG}\n  cursor: ${state.lastCursor ? `resume ${state.lastCursor.slice(0, 24)}…` : `fresh start (${RESTART_HEAD_OFFSET} from head)`}`,
+  logger.info(
+    {
+      module: OUTPUT_MODULE,
+      endpoint: ENDPOINT,
+      spkg: SPKG,
+      cursor: state.lastCursor ? `resume ${state.lastCursor.slice(0, 24)}…` : `fresh start (${RESTART_HEAD_OFFSET} from head)`,
+    },
+    "substreams manager starting",
   );
 
   let backoffMs = 1000;
@@ -205,8 +231,16 @@ export async function startSubstreams(): Promise<never> {
         blocksSeen += 1;
         const matches = await matchTransfers(message, clock);
         for (const e of matches) {
-          console.log(
-            `MATCH intent ${e.intentId.slice(0, 8)}… block ${e.block} · log ${e.logIndex} · amount ${e.amount} · tx ${e.txHash.slice(0, 14)}… · ${e.blockTimestamp}`,
+          logger.debug(
+            {
+              intent: e.intentId,
+              block: e.block.toString(),
+              logIndex: e.logIndex,
+              amount: e.amount,
+              tx: e.txHash,
+              chainTime: e.blockTimestamp,
+            },
+            "match",
           );
         }
         const byIntent = new Map<string, number>();
@@ -226,8 +260,9 @@ export async function startSubstreams(): Promise<never> {
           // can't live inside the transaction), exactly once per intent: only when this
           // block crossed the counter from zero (total - count === 0).
           if (total - count === 0) await onEventsMatched(intentId);
-          console.log(
-            `metered ${count} match(es) for intent ${intentId.slice(0, 8)}… → events_matched=${total}`,
+          logger.debug(
+            { intent: intentId, metered: count, eventsMatched: total },
+            "metered block matches",
           );
         }
       });
@@ -239,7 +274,7 @@ export async function startSubstreams(): Promise<never> {
       if (emptyAttempts >= MAX_EMPTY_ATTEMPTS) {
         throw new Error(`${MAX_EMPTY_ATTEMPTS} consecutive attempts with no blocks — giving up`);
       }
-      console.log(`stream ended after ${blocksSeen} blocks — retrying in ${backoffMs}ms`);
+      logger.info({ blocksSeen }, `stream ended after ${blocksSeen} blocks — retrying in ${backoffMs}ms`);
     } catch (e) {
       emptyAttempts += 1;
       if (resuming) {
@@ -248,7 +283,7 @@ export async function startSubstreams(): Promise<never> {
         // repeated resume failures, fall back to a head start (misses downtime events;
         // that is the correct recovery for an upgraded package).
         if (failuresOnCursor >= 3) {
-          console.error("resume keeps failing — wiping cursor and restarting from head");
+          logger.warn("resume keeps failing — wiping cursor and restarting from head");
           await clearCursor();
           state.lastCursor = undefined;
           failuresOnCursor = 0;
@@ -257,7 +292,7 @@ export async function startSubstreams(): Promise<never> {
       if (emptyAttempts >= MAX_EMPTY_ATTEMPTS) {
         throw e;
       }
-      console.error(`stream attempt failed (${e instanceof Error ? e.message : e}) — retrying in ${backoffMs}ms`);
+      logger.warn({ err: e instanceof Error ? e.message : e }, `stream attempt failed — retrying in ${backoffMs}ms`);
     }
     await sleep(backoffMs);
     backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF_MS);
@@ -284,7 +319,7 @@ async function clearCursor() {
 const isMain = process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url;
 if (isMain) {
   startSubstreams().catch((e) => {
-    console.error("substreams manager exited:", e instanceof Error ? e.message : e);
+    logger.error({ err: e instanceof Error ? e.message : e }, "substreams manager exited");
     process.exit(1);
   });
 }
