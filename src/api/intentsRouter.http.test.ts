@@ -122,6 +122,12 @@ describe("3.2 — 402 issuance", () => {
     expect(problems).toHaveLength(4); // query_intent, target_contract, event_condition, ttl_seconds
   });
 
+  it("rejects client-set pricing — the rate is the server's decision, never a request field", async () => {
+    const res = await post({ ...validBody, rate_per_event_atomic: "1" });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { problems: string[] }).problems.join(" ")).toMatch(/set by the server/);
+  });
+
   it("rejects a non-https, non-loopback webhook_url (SSRF)", async () => {
     const res = await post({ ...validBody, webhook_url: "http://evil.example.com/hook" });
     expect(res.status).toBe(400);

@@ -61,17 +61,28 @@ describe("computeCeiling", () => {
   it("ceilings use ≥ 1 minute even for sub-minute TTLs", () => {
     // ttl clamps to 60 anyway; this pins the Math.max(1, ...) guard for any future
     // MIN_TTL_S change — one minute of expected matches is the floor.
-    const { maxLimit } = computeCeiling({ ttl_seconds: MIN_TTL_S, rate_per_event_atomic: "1000" });
+    const { maxLimit } = computeCeiling({ ttl_seconds: MIN_TTL_S }, "1000");
     expect(maxLimit).toBe("5000"); // 1 minute × 5 matches/min × rate
   });
 
-  it("honors an explicit atomic ceiling and an explicit rate", () => {
+  it("honors an explicit client ceiling — the client's one owned number", () => {
     expect(computeCeiling({ ttl_seconds: 600, max_limit_atomic: "42" }).maxLimit).toBe("42");
-    expect(computeCeiling({ ttl_seconds: 600, rate_per_event_atomic: "7" }).maxLimit).toBe((7n * 10n * 5n).toString());
   });
 
-  it("ignores malformed rate/max_limit strings (validation also rejects them upstream)", () => {
-    expect(computeCeiling({ ttl_seconds: 600, rate_per_event_atomic: "-5" }).rate).toBe("1858");
+  it("ignores any client-supplied rate — pricing is the server's decision (server-owned pricing)", () => {
+    // A client rate of 1 atomic/event would underprice our per-block COGS to ~zero.
+    // The field is rejected by the API; computeCeiling never consults it.
+    const ignored = computeCeiling({ ttl_seconds: 600, rate_per_event_atomic: "1" } as never);
+    expect(ignored.rate).toBe("1858"); // the server rate (RATE_PER_EVENT default)
+    expect(ignored.maxLimit).toBe("92900"); // 1858 × 10 min × 5 — not 1 × 10 × 5
+  });
+
+  it("accepts a server-side rate override (tests / future pricing config)", () => {
+    expect(computeCeiling({ ttl_seconds: 600 }, "7").maxLimit).toBe((7n * 10n * 5n).toString());
+    expect(computeCeiling({ ttl_seconds: 600 }, "7").rate).toBe("7");
+  });
+
+  it("ignores malformed max_limit strings (validation also rejects them upstream)", () => {
     expect(computeCeiling({ ttl_seconds: 600, max_limit_atomic: "1.5" }).maxLimit).not.toBe("1.5");
   });
 });

@@ -35,7 +35,16 @@ export function isAcceptableWebhook(url: string): boolean {
 // expected matching events per minute on the watched contract (mainnet USDC at the
 // demo threshold runs ~4–10/min; 5 is the conservative middle).
 export const EST_MATCHES_PER_MIN = 5;
-export const DEFAULT_RATE_PER_EVENT = "1858";
+
+// SERVER-OWNED PRICING: the per-event rate is our price list (COGS + margin), never a
+// client input — a client-set rate would let the agent underprice our delivery to
+// ~zero while the per-block Substreams cost stays fixed. The client owns exactly one
+// number: max_limit_atomic, their worst-case spend commitment. The rate is frozen on
+// the intent at creation, so price changes never reprice an active window.
+// Provenance: 1858 was the day-1 deferred-settle spike's demo amount, adopted as the
+// default. TODO before Phase 5 pricing is finalized: derive a rate floor from the
+// Substreams COGS ($1.75/1M blocks ÷ expected matches per block) plus margin.
+export const RATE_PER_EVENT = process.env.RATE_PER_EVENT_ATOMIC ?? "1858";
 export const MIN_TTL_S = 60;
 export const MAX_TTL_S = 86_400;
 
@@ -53,16 +62,17 @@ const isHexAddress = (v: string) => /^0x[0-9a-fA-F]{40}$/.test(v);
 const isAtomicString = (v: string | undefined) => typeof v === "string" && /^\d+$/.test(v);
 
 // Pure ceiling computation (extracted for the test suite): clamps TTL into
-// [MIN_TTL_S, MAX_TTL_S], falls back to the default rate, and estimates the ceiling as
-// rate × expected-matches (minutes × EST_MATCHES_PER_MIN) unless the agent sets it.
+// [MIN_TTL_S, MAX_TTL_S], and estimates the ceiling as rate × expected-matches
+// (minutes × EST_MATCHES_PER_MIN) unless the agent sets their own ceiling. The rate
+// is the server's (see SERVER-OWNED PRICING above) — injectable here for tests.
 export function computeCeiling(
-  body: Pick<StreamIntentBody, "ttl_seconds" | "rate_per_event_atomic" | "max_limit_atomic">,
+  body: Pick<StreamIntentBody, "ttl_seconds" | "max_limit_atomic">,
+  rate: string = RATE_PER_EVENT,
 ): { ttl: number; rate: string; maxLimit: string } {
   const requested = Number(body.ttl_seconds ?? 0);
   // NaN-safe clamp: Number.isFinite guards BigInt(...) downstream (unreachable via the
   // API — validation 400s first — but this function is the pure source of truth).
   const ttl = Number.isFinite(requested) ? Math.min(MAX_TTL_S, Math.max(MIN_TTL_S, Math.floor(requested))) : MIN_TTL_S;
-  const rate = isAtomicString(body.rate_per_event_atomic) ? body.rate_per_event_atomic! : DEFAULT_RATE_PER_EVENT;
   const maxLimit = isAtomicString(body.max_limit_atomic)
     ? body.max_limit_atomic!
     : (BigInt(rate) * BigInt(Math.max(1, Math.ceil(ttl / 60)) * EST_MATCHES_PER_MIN)).toString();
@@ -129,6 +139,9 @@ async function createIntentHandler(req: Request, res: Response) {
   const problems: string[] = [];
   if (!body.query_intent || typeof body.query_intent !== "string") problems.push("query_intent (string) is required");
   if (!body.target_contract || !isHexAddress(body.target_contract)) problems.push("target_contract (0x address) is required");
+  if (body.rate_per_event_atomic !== undefined) {
+    problems.push("rate_per_event_atomic is set by the server — pricing is our decision (COGS + margin), do not send it");
+  }
   if (!body.event_condition || !isAtomicString(body.event_condition.minAmount)) {
     problems.push("event_condition.minAmount (atomic-unit string) is required");
   }
@@ -149,7 +162,7 @@ async function createIntentHandler(req: Request, res: Response) {
     targetContract: body.target_contract!,
     ttlTimestamp: new Date(Date.now() + ttl * 1000),
     maxLimitAtomic: maxLimit,
-    ratePerEventAtomic: body.rate_per_event_atomic ?? DEFAULT_RATE_PER_EVENT,
+    ratePerEventAtomic: RATE_PER_EVENT,
     eventCondition: body.event_condition as { minAmount: string },
     webhookUrl: body.webhook_url,
   });
