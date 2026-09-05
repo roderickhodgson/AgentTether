@@ -1,3 +1,21 @@
+/**
+ * Day-1 spike for risk #1: x402 `upto` settlement can be deferred — verify now,
+ * settle later, for a partial amount.
+ *
+ * Signs a Permit2 `upto` voucher against a high ceiling, gets it verified by the
+ * hosted facilitator, then — after an optional wait — settles it for a partial
+ * `actualAmount`. This is the exact flow AgentTether's stream route relies on:
+ * the API answers 202 without settling, and Phase 4's settlement engine later
+ * settles from the stored voucher (verify→settle gap is hours, not seconds).
+ *
+ * Runs against Base Sepolia USDC and the default facilitator; recorded on-chain
+ * evidence lives in README "Spike Results". Modes (argv[2]):
+ *   discover (default) — full flow: sign → verify → wait → settle partial
+ *   exceed             — settling above the ceiling must be rejected
+ *   zero               — zero-amount settle succeeds with no on-chain tx (per spec)
+ * Flags: `--wait <s>` pauses between verify and settle; `--reuse` replays the
+ * payload persisted in ./payload.json instead of signing fresh.
+ */
 import { createPublicClient, createWalletClient, erc20Abi, http, maxUint256 } from "viem";
 import { baseSepolia } from "viem/chains";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
