@@ -3,12 +3,17 @@ import express from "express";
 import { prisma } from "./db.js";
 import { logger } from "./logger.js";
 import { intentsRouter } from "./api/intentsRouter.js";
+import { mountOneshot } from "./api/oneshot.js";
 import { startSubstreams } from "./dataplane/substreamsManager.js";
 import { startSettlementSweeps } from "./cron.js";
 
 const app = express();
 app.use(express.json());
+// Order matters: the intents router (including the middleware-bypassing /stream route)
+// answers before the oneshot payment middleware sees the request; the oneshot handler
+// sits AFTER the middleware so it only runs on verified payment.
 app.use(intentsRouter);
+mountOneshot(app);
 
 app.get("/healthz", async (_req, res) => {
   try {

@@ -136,9 +136,13 @@ function captureTransfers(message: JsonObject | undefined, clock: Clock): Captur
   const transfers = (message as { transfers?: TransferEvent[] } | undefined)?.transfers ?? [];
   const chain = process.env.DATA_CHAIN ?? "ethereum-mainnet";
   const ts = new Date(blockTimestamp(clock));
+  // Capture rows carry the canonical 0x-prefixed form (public API surface — the oneshot
+  // responses and its allowlist comparisons are web3-shaped, unlike the internal
+  // matched-events webhook payload which keeps the bare-hex convention).
+  const hex = (h: string) => `0x${normalizeHex(h)}`;
   const out: CaptureTransferInput[] = [];
   for (const t of transfers) {
-    const contract = normalizeHex(t.contract);
+    const contract = hex(t.contract);
     if (!allow.includes(contract.toLowerCase())) continue;
     let amount: bigint;
     try {
@@ -150,11 +154,11 @@ function captureTransfers(message: JsonObject | undefined, clock: Clock): Captur
       chain,
       blockNum: clock.number,
       blockTimestamp: Number.isNaN(ts.getTime()) ? new Date(0) : ts,
-      txHash: normalizeHex(t.txId),
+      txHash: hex(t.txId),
       logIndex: Number(t.blockIndex ?? 0),
       contract,
-      from: normalizeHex(t.from),
-      to: normalizeHex(t.to),
+      from: hex(t.from),
+      to: hex(t.to),
       amount,
     });
   }
