@@ -25,6 +25,12 @@ import { logger } from "../logger.js";
 // (4.3) and settlement itself takes time, so require the voucher to be valid for the
 // whole TTL plus this buffer.
 const DEADLINE_BUFFER_S = 120;
+
+// Risk #8 (SSRF): public webhook targets must be https. Plain http is accepted only for
+// loopback, where the demo receivers and the Phase 5 agent's local Flask server run.
+function isAcceptableWebhook(url: string): boolean {
+  return /^https:\/\//.test(url) || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?([/?#]|$)/.test(url);
+}
 // Heuristic for ceiling estimation when the agent doesn't pass max_limit_atomic:
 // expected matching events per minute on the watched contract (mainnet USDC at the
 // demo threshold runs ~4–10/min; 5 is the conservative middle).
@@ -116,8 +122,8 @@ async function createIntentHandler(req: Request, res: Response) {
   if (!Number.isFinite(Number(body.ttl_seconds)) || Number(body.ttl_seconds) < MIN_TTL_S) {
     problems.push(`ttl_seconds (number ≥ ${MIN_TTL_S}) is required`);
   }
-  if (body.webhook_url && !/^https:\/\//.test(body.webhook_url)) {
-    problems.push("webhook_url must be https (see risk #8 SSRF note)");
+  if (body.webhook_url && !isAcceptableWebhook(body.webhook_url)) {
+    problems.push("webhook_url must be https, or http://localhost / 127.0.0.1 for local receivers (see risk #8 SSRF note)");
   }
   if (problems.length > 0) {
     res.status(400).json({ error: "invalid intent", problems });

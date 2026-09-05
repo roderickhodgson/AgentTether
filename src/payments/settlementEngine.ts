@@ -77,6 +77,10 @@ async function settleVoucher(payload: PaymentPayload, actualAtomic: string): Pro
 
 const UNCERTAIN_REASON = /nonce|already|used|consumed/i;
 const DEADLINE_EXPIRED = /deadline/i;
+// Structurally-unsettleable vouchers — retrying can never succeed. Everything else
+// (tx-submission failures, facilitator RPC/queue congestion, transient gas trouble)
+// stays SETTLING so the sweep retries while the voucher's deadline window is open.
+const PERMANENT_REASON = /signature|malformed|missing|requirements|unknown|not verified|unsupported|scheme/i;
 
 // Receipt gate (fail-closed): poll eth_getTransactionReceipt over plain JSON-RPC until
 // the settlement tx exists and succeeded, or give up (leaving the intent SETTLING —
@@ -182,7 +186,12 @@ async function deliverWebhook(url: string, notice: WebhookNotice): Promise<void>
 //    (it settles within the ttl + buffer window); only backend downtime beyond that
 //    window voids the authorization. The agent keeps its funds and no data delivers
 //    (fail-closed held) — a timeout notice still fires, without event data.
-//  - anything else → SETTLE_FAILED (retryable operational failure, e.g. drained balance)
+//  - structural rejections → SETTLE_FAILED (unsettleable voucher; retrying can't help)
+//  - everything else (tx-submission failures, facilitator congestion, RPC hiccups) is
+//    transient by default → leave SETTLING; the sweep retries while the deadline window
+//    is open, and a deadline-expired rejection eventually lands the honest TIMEOUT.
+//    Defaulting to retryable is deliberate: the cost of a wrong TERMINAL call is lost
+//    money; the cost of a wrong retryable call is bounded sweeps until the deadline.
 async function handleSettleRejection(
   intentId: string,
   reason: string,
@@ -212,8 +221,12 @@ async function handleSettleRejection(
     });
     return;
   }
-  logger.error({ intent: intentId, reason }, "settlement rejected — intent marked SETTLE_FAILED");
-  await markSettleFailed(intentId);
+  if (PERMANENT_REASON.test(reason)) {
+    logger.error({ intent: intentId, reason }, "settlement rejected (structural) — intent marked SETTLE_FAILED");
+    await markSettleFailed(intentId);
+    return;
+  }
+  logger.warn({ intent: intentId, reason }, "settle rejected (transient?) — leaving SETTLING for sweep retry");
 }
 
 // ---- the two settlement paths ----------------------------------------------
@@ -326,24 +339,33 @@ export async function executeTimeoutSettlement(intentId: string): Promise<void> 
 
 // One pass over every intent owed settlement work (4.3): expired MONITORING goes to the
 // timeout path, metered-but-unsettled goes to the success path (lost-trigger recovery),
-// stale SETTLING re-drives. CAS claims make double-drive safe, so the sweep can race the
-// event-fired trigger without harm.
+// stale SETTLING re-drives. Candidates settle CONCURRENTLY — each has its own voucher,
+// nonce and DB row, so parallel settles are independent — which keeps the startup pass
+// from serializing into minutes when a long downtime left many intents behind. CAS
+// claims make double-drive safe, so the sweep can race the event-fired trigger without
+// harm.
 export async function runSettlementSweep(now = new Date()): Promise<number> {
   const candidates = await getSettlementCandidates(now);
-  let acted = 0;
-  for (const intent of candidates) {
-    const expired = intent.ttlTimestamp < now;
-    try {
+  if (candidates.length === 0) return 0;
+  const results = await Promise.allSettled(
+    candidates.map(async (intent) => {
+      const expired = intent.ttlTimestamp < now;
       if (expired) {
         await executeTimeoutSettlement(intent.id);
       } else if (intent.eventsMatched > 0) {
         await executeSuccessSettlement(intent.id);
       }
+    }),
+  );
+  let acted = 0;
+  for (let i = 0; i < results.length; i++) {
+    const r = results[i];
+    if (r.status === "rejected") {
+      logger.error({ intent: candidates[i].id, err: r.reason instanceof Error ? r.reason.message : r.reason }, "sweep settlement attempt failed — will retry next pass");
+    } else {
       acted += 1;
-    } catch (e) {
-      logger.error({ intent: intent.id, err: e instanceof Error ? e.message : e }, "sweep settlement attempt failed — will retry next pass");
     }
   }
-  if (candidates.length > 0) logger.info({ candidates: candidates.length, acted }, "settlement sweep pass complete");
+  logger.info({ candidates: candidates.length, acted }, "settlement sweep pass complete");
   return acted;
 }
