@@ -6,7 +6,7 @@ import {
   getExpiredMonitoringIntents,
   updateIntentStatus,
   prisma,
-} from "./db.js";
+} from "../db.js";
 
 const agentWallet = process.env.AGENT_WALLET;
 if (!agentWallet) throw new Error("AGENT_WALLET is required in .env (demo agent wallet address)");

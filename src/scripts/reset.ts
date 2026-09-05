@@ -6,7 +6,7 @@
  */
 import "dotenv/config";
 import { createInterface } from "node:readline/promises";
-import { prisma } from "./db.js";
+import { prisma } from "../db.js";
 
 const force = process.argv.includes("--force");
 if (!force) {

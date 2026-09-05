@@ -5,7 +5,7 @@
  * One new intent per run; the TTL expires it after 30 minutes. Run via `npm run fixture`.
  */
 import "dotenv/config";
-import { createIntent, storeVerifiedPayment, prisma } from "./db.js";
+import { createIntent, storeVerifiedPayment, prisma } from "../db.js";
 
 // Data-plane contract (Ethereum mainnet USDC) — NOT the Base Sepolia payment-plane USDC.
 const MAINNET_USDC = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";

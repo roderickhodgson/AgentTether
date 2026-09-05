@@ -10,10 +10,10 @@
     "typecheck": "tsc --noEmit",
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
-    "smoke": "tsx src/smoke.ts",
-    "fixture": "tsx src/fixture.ts",
+    "smoke": "tsx src/scripts/smoke.ts",
+    "fixture": "tsx src/scripts/fixture.ts",
     "stream": "tsx src/dataplane/substreamsManager.ts",
-    "reset": "tsx src/reset.ts"
+    "reset": "tsx src/scripts/reset.ts"
   },
   "repository": {
     "type": "git",
