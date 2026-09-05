@@ -67,6 +67,41 @@ type NormalizedEvent = {
 
 const normalizeHex = (h: string) => h.toLowerCase().replace(/^0x/, "");
 
+// The per-transfer matching predicate (extracted for the test suite — it encodes the
+// 2.3 window semantics). `blockTime === null` means the block carried no usable
+// timestamp, which leaves BOTH time guards open (the designed fail-open default: an
+// absent clock never silently disqualifies matches). A malformed minAmount disables
+// matching for the intent rather than crashing the stream.
+export type MatchableIntent = {
+  targetContract: string;
+  eventCondition: unknown; // { minAmount?: string } per the API contract
+  createdAt: Date;
+  ttlTimestamp: Date;
+};
+
+export function matchesIntent(
+  intent: MatchableIntent,
+  transfer: { contract: string; value: string },
+  blockTime: Date | null,
+): boolean {
+  if (blockTime) {
+    // Window start guard: never meter events that predate the intent — a fresh intent
+    // created during a downtime catch-up would otherwise match historical blocks.
+    if (blockTime < intent.createdAt) return false;
+    // Window end guard (TTL): never meter events for an intent whose window has closed.
+    if (blockTime > intent.ttlTimestamp) return false;
+  }
+  if (normalizeHex(transfer.contract) !== normalizeHex(intent.targetContract)) return false;
+  const minAmount = (intent.eventCondition as { minAmount?: string } | null)?.minAmount;
+  if (!minAmount) return false;
+  try {
+    if (BigInt(transfer.value) < BigInt(minAmount)) return false;
+  } catch {
+    return false;
+  }
+  return true;
+}
+
 function blockTimestamp(clock: Clock): string {
   const ts = clock.timestamp;
   return ts?.seconds != null ? new Date(Number(ts.seconds) * 1000).toISOString() : "";
@@ -106,21 +141,9 @@ async function matchTransfers(message: JsonObject | undefined, clock: Clock): Pr
   const out: NormalizedEvent[] = [];
   for (const t of transfers) {
     for (const intent of intents) {
-      // Window start guard: never meter events that predate the intent — a fresh intent
-      // created during a downtime catch-up would otherwise match historical blocks.
-      if (blockTimeValid && blockTime < intent.createdAt) continue;
-      // Window end guard (TTL): never meter events for an intent whose window has closed.
-      if (blockTimeValid && blockTime > intent.ttlTimestamp) continue;
-      if (normalizeHex(t.contract) !== normalizeHex(intent.targetContract)) continue;
-      const minAmount = (intent.eventCondition as { minAmount?: string } | null)?.minAmount;
-      if (!minAmount) continue;
-      // minAmount is a string in atomic units; a malformed value disables matching
-      // for the intent rather than crashing the stream.
-      try {
-        if (BigInt(t.value) < BigInt(minAmount)) continue;
-      } catch {
-        continue;
-      }
+      // Time guards live in matchesIntent: an absent/invalid block timestamp passes
+      // null, which leaves both guards open (fail-open by design, see above).
+      if (!matchesIntent(intent, t, blockTimeValid ? blockTime : null)) continue;
       out.push({
         intentId: intent.id,
         chain: process.env.DATA_CHAIN ?? "ethereum-mainnet",

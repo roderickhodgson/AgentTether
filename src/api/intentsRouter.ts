@@ -24,20 +24,20 @@ import { logger } from "../logger.js";
 // Permit2 deadlines must outlive the monitoring window: cron sweeps run every minute
 // (4.3) and settlement itself takes time, so require the voucher to be valid for the
 // whole TTL plus this buffer.
-const DEADLINE_BUFFER_S = 120;
+export const DEADLINE_BUFFER_S = 120;
 
 // Risk #8 (SSRF): public webhook targets must be https. Plain http is accepted only for
 // loopback, where the demo receivers and the Phase 5 agent's local Flask server run.
-function isAcceptableWebhook(url: string): boolean {
+export function isAcceptableWebhook(url: string): boolean {
   return /^https:\/\//.test(url) || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?([/?#]|$)/.test(url);
 }
 // Heuristic for ceiling estimation when the agent doesn't pass max_limit_atomic:
 // expected matching events per minute on the watched contract (mainnet USDC at the
 // demo threshold runs ~4–10/min; 5 is the conservative middle).
-const EST_MATCHES_PER_MIN = 5;
-const DEFAULT_RATE_PER_EVENT = "1858";
-const MIN_TTL_S = 60;
-const MAX_TTL_S = 86_400;
+export const EST_MATCHES_PER_MIN = 5;
+export const DEFAULT_RATE_PER_EVENT = "1858";
+export const MIN_TTL_S = 60;
+export const MAX_TTL_S = 86_400;
 
 type StreamIntentBody = {
   query_intent?: string;
@@ -51,6 +51,23 @@ type StreamIntentBody = {
 
 const isHexAddress = (v: string) => /^0x[0-9a-fA-F]{40}$/.test(v);
 const isAtomicString = (v: string | undefined) => typeof v === "string" && /^\d+$/.test(v);
+
+// Pure ceiling computation (extracted for the test suite): clamps TTL into
+// [MIN_TTL_S, MAX_TTL_S], falls back to the default rate, and estimates the ceiling as
+// rate × expected-matches (minutes × EST_MATCHES_PER_MIN) unless the agent sets it.
+export function computeCeiling(
+  body: Pick<StreamIntentBody, "ttl_seconds" | "rate_per_event_atomic" | "max_limit_atomic">,
+): { ttl: number; rate: string; maxLimit: string } {
+  const requested = Number(body.ttl_seconds ?? 0);
+  // NaN-safe clamp: Number.isFinite guards BigInt(...) downstream (unreachable via the
+  // API — validation 400s first — but this function is the pure source of truth).
+  const ttl = Number.isFinite(requested) ? Math.min(MAX_TTL_S, Math.max(MIN_TTL_S, Math.floor(requested))) : MIN_TTL_S;
+  const rate = isAtomicString(body.rate_per_event_atomic) ? body.rate_per_event_atomic! : DEFAULT_RATE_PER_EVENT;
+  const maxLimit = isAtomicString(body.max_limit_atomic)
+    ? body.max_limit_atomic!
+    : (BigInt(rate) * BigInt(Math.max(1, Math.ceil(ttl / 60)) * EST_MATCHES_PER_MIN)).toString();
+  return { ttl, rate, maxLimit };
+}
 
 function resourceUrl(req: Request, intentId: string): string {
   const host = req.get("host") ?? `localhost:${process.env.PORT ?? 8080}`;
@@ -71,11 +88,7 @@ function paymentRequiredResponse(res: Response, paymentRequired: PaymentRequired
 // ceiling, payTo, asset and facilitator binding. `maxTimeoutSeconds` mirrors what was
 // advertised in the 402 (ttl + buffer) — it is the client's Permit2 deadline hint.
 async function streamRequirements(body: StreamIntentBody) {
-  const ttl = Math.min(MAX_TTL_S, Math.max(MIN_TTL_S, Math.floor(Number(body.ttl_seconds ?? 0))));
-  const rate = isAtomicString(body.rate_per_event_atomic) ? body.rate_per_event_atomic! : DEFAULT_RATE_PER_EVENT;
-  const maxLimit = isAtomicString(body.max_limit_atomic)
-    ? body.max_limit_atomic!
-    : (BigInt(rate) * BigInt(Math.max(1, Math.ceil(ttl / 60)) * EST_MATCHES_PER_MIN)).toString();
+  const { ttl, rate, maxLimit } = computeCeiling(body);
   const { facilitatorAddress } = await discoverUpto();
 
   const requirements: PaymentRequirements = {
@@ -87,10 +100,10 @@ async function streamRequirements(body: StreamIntentBody) {
     maxTimeoutSeconds: ttl + DEADLINE_BUFFER_S,
     extra: { name: "USDC", version: "2", facilitatorAddress },
   };
-  return { requirements, ttl, maxLimit };
+  return { requirements, ttl, maxLimit, rate };
 }
 
-function advertisedMaxTimeoutSeconds(ttlSeconds: number): number {
+export function advertisedMaxTimeoutSeconds(ttlSeconds: number): number {
   return ttlSeconds + DEADLINE_BUFFER_S;
 }
 

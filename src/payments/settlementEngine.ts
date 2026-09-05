@@ -51,7 +51,7 @@ const RPC_URL = process.env.RPC_URL ?? "https://sepolia.base.org";
 
 // ---- amount math -----------------------------------------------------------
 
-function actualAmountAtomic(eventsMatched: number, ratePerEventAtomic: string, maxLimitAtomic: string): string {
+export function actualAmountAtomic(eventsMatched: number, ratePerEventAtomic: string, maxLimitAtomic: string): string {
   const metered = BigInt(eventsMatched) * BigInt(ratePerEventAtomic);
   return (metered > BigInt(maxLimitAtomic) ? BigInt(maxLimitAtomic) : metered).toString();
 }
@@ -80,7 +80,25 @@ const DEADLINE_EXPIRED = /deadline/i;
 // Structurally-unsettleable vouchers — retrying can never succeed. Everything else
 // (tx-submission failures, facilitator RPC/queue congestion, transient gas trouble)
 // stays SETTLING so the sweep retries while the voucher's deadline window is open.
-const PERMANENT_REASON = /signature|malformed|missing|requirements|unknown|not verified|unsupported|scheme/i;
+// Note: no "missing" here — the facilitator's generic tx failure says "Missing or
+// invalid parameters", and that case MUST stay transient (it settled on sweep retry).
+const PERMANENT_REASON = /signature|malformed|requirements|unknown|not verified|unsupported|scheme/i;
+
+// Pure rejection triage (extracted for the test suite; the classes and their order of
+// precedence are the ladder earned live — see the header's "Crash-window rule" and the
+// deadline race note, plus README 4.4):
+//  - uncertain: a consumed nonce means a previous settle may have succeeded → manual
+//  - deadline: the authorization is void → TIMEOUT uncollected
+//  - structural: the voucher can never settle → SETTLE_FAILED
+//  - transient (default): retry in the sweep until the deadline closes the window
+export type SettleRejectionClass = "uncertain" | "deadline" | "structural" | "transient";
+
+export function classifySettleRejection(reason: string): SettleRejectionClass {
+  if (UNCERTAIN_REASON.test(reason)) return "uncertain";
+  if (DEADLINE_EXPIRED.test(reason)) return "deadline";
+  if (PERMANENT_REASON.test(reason)) return "structural";
+  return "transient";
+}
 
 // Receipt gate (fail-closed): poll eth_getTransactionReceipt over plain JSON-RPC until
 // the settlement tx exists and succeeded, or give up (leaving the intent SETTLING —
@@ -139,7 +157,7 @@ type WebhookNotice = {
   }>;
 };
 
-function eventsForWebhook(stored: unknown, eventsMatched: number): { events: WebhookNotice["events"]; truncated: boolean } {
+export function eventsForWebhook(stored: unknown, eventsMatched: number): { events: WebhookNotice["events"]; truncated: boolean } {
   const prior = Array.isArray(stored) ? (stored as PersistedMatchedEvent[]) : [];
   return {
     events: prior.map((e) => ({
@@ -198,35 +216,38 @@ async function handleSettleRejection(
   notice: Pick<WebhookNotice, "agent_wallet" | "events_matched">,
   webhookUrl: string | null,
 ): Promise<void> {
-  if (UNCERTAIN_REASON.test(reason)) {
-    if (!uncertainLogged.has(intentId)) {
-      uncertainLogged.add(intentId);
-      logger.error({ intent: intentId, reason }, "settle rejected with consumed nonce — MANUAL CHECK required (runbook): verify on basescan whether the voucher already settled");
+  switch (classifySettleRejection(reason)) {
+    case "uncertain": {
+      if (!uncertainLogged.has(intentId)) {
+        uncertainLogged.add(intentId);
+        logger.error({ intent: intentId, reason }, "settle rejected with consumed nonce — MANUAL CHECK required (runbook): verify on basescan whether the voucher already settled");
+      }
+      return;
     }
-    return;
+    case "deadline": {
+      logger.warn({ intent: intentId, reason }, "settle rejected — permit deadline expired, authorization void; marking TIMEOUT (uncollected)");
+      await markTimeout(intentId);
+      if (!webhookUrl) return;
+      await deliverWebhook(webhookUrl, {
+        type: "intent.timeout",
+        intent_id: intentId,
+        agent_wallet: notice.agent_wallet,
+        network: NETWORK,
+        pay_to: PAY_TO_ADDRESS,
+        events_matched: notice.events_matched,
+        events_truncated: false,
+        events: [],
+      });
+      return;
+    }
+    case "structural": {
+      logger.error({ intent: intentId, reason }, "settlement rejected (structural) — intent marked SETTLE_FAILED");
+      await markSettleFailed(intentId);
+      return;
+    }
+    case "transient":
+      logger.warn({ intent: intentId, reason }, "settle rejected (transient?) — leaving SETTLING for sweep retry");
   }
-  if (DEADLINE_EXPIRED.test(reason)) {
-    logger.warn({ intent: intentId, reason }, "settle rejected — permit deadline expired, authorization void; marking TIMEOUT (uncollected)");
-    await markTimeout(intentId);
-    if (!webhookUrl) return;
-    await deliverWebhook(webhookUrl, {
-      type: "intent.timeout",
-      intent_id: intentId,
-      agent_wallet: notice.agent_wallet,
-      network: NETWORK,
-      pay_to: PAY_TO_ADDRESS,
-      events_matched: notice.events_matched,
-      events_truncated: false,
-      events: [],
-    });
-    return;
-  }
-  if (PERMANENT_REASON.test(reason)) {
-    logger.error({ intent: intentId, reason }, "settlement rejected (structural) — intent marked SETTLE_FAILED");
-    await markSettleFailed(intentId);
-    return;
-  }
-  logger.warn({ intent: intentId, reason }, "settle rejected (transient?) — leaving SETTLING for sweep retry");
 }
 
 // ---- the two settlement paths ----------------------------------------------
