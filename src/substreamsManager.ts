@@ -3,7 +3,8 @@
  *
  * Streams the vendored ERC-20 transfers package from a hosted Substreams endpoint,
  * matches each block's transfers against active MONITORING intents (contract + min
- * amount + TTL), meters matches into `events_matched`, persists the stream cursor to
+ * amount + the intent's [createdAt, ttlTimestamp] window), meters matches into
+ * `events_matched`, persists the stream cursor to
  * Postgres for crash/resume safety, and hands each intent's first match to the
  * settlement engine. Runs standalone (`npm run stream`) or via `startSubstreams()`
  * from the Express entrypoint.
@@ -105,6 +106,9 @@ async function matchTransfers(message: JsonObject | undefined, clock: Clock): Pr
   const out: NormalizedEvent[] = [];
   for (const t of transfers) {
     for (const intent of intents) {
+      // Window start guard: never meter events that predate the intent — a fresh intent
+      // created during a downtime catch-up would otherwise match historical blocks.
+      if (blockTimeValid && blockTime < intent.createdAt) continue;
       // Window end guard (TTL): never meter events for an intent whose window has closed.
       if (blockTimeValid && blockTime > intent.ttlTimestamp) continue;
       if (normalizeHex(t.contract) !== normalizeHex(intent.targetContract)) continue;
