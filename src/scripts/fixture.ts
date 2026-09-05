@@ -17,8 +17,9 @@ const intent = await createIntent({
   agentWallet,
   targetContract: MAINNET_USDC,
   ttlTimestamp: new Date(Date.now() + 30 * 60 * 1000),
-  maxLimitAtomic: "5000000", // 5 USDC ceiling (atomic units, 6 decimals) — bounds worst-case spend
-  ratePerEventAtomic: "1858", // charged per matching event
+  maxLimitAtomic: "5000000", // quoted ceiling (atomic units, 6 decimals)
+  perBlockRateAtomic: "100", // charged per processed block
+  budgetBlocks: 50000, // = ceiling ÷ rate
   eventCondition: { minAmount: "1000000000" }, // match USDC transfers >= 1,000 (1e9 atomic)
   webhookUrl: process.env.FIXTURE_WEBHOOK_URL,
 });
@@ -30,6 +31,6 @@ const stored = await storeVerifiedPayment(intent.id, `fixture-${Date.now()}`, {
 });
 
 console.log(
-  `fixture intent ${stored.id}\n  status:    ${stored.status}\n  contract:  ${stored.targetContract}\n  condition: ${JSON.stringify(stored.eventCondition)}\n  ttl:       ${stored.ttlTimestamp.toISOString()}\n  ceiling:   ${stored.maxLimitAtomic} · rate: ${stored.ratePerEventAtomic}`,
+  `fixture intent ${stored.id}\n  status:    ${stored.status}\n  contract:  ${stored.targetContract}\n  condition: ${JSON.stringify(stored.eventCondition)}\n  ttl:       ${stored.ttlTimestamp.toISOString()}\n  ceiling:   ${stored.maxLimitAtomic} · perBlockRate: ${stored.perBlockRateAtomic} · budgetBlocks: ${stored.budgetBlocks}`,
 );
 await prisma.$disconnect();

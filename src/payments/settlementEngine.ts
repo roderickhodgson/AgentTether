@@ -38,6 +38,8 @@ import type { PaymentPayload, PaymentRequirements } from "@x402/core/types";
 import {
   getIntent,
   getSettlementCandidates,
+  getCursor,
+  windowOver,
   claimForSettlement,
   claimStaleSettlement,
   markSettled,
@@ -58,21 +60,47 @@ export function formatUsdc(atomic: string): string {
   return frac ? `${whole}.${frac}` : `${whole}`;
 }
 
-// The money story shared by both settlement paths: what the 402 advertised (the intent's
-// ceiling), what the voucher actually permitted, and what we are about to settle.
-function moneyStory(intent: { maxLimitAtomic: string; paymentPayload: unknown; eventsMatched: number }) {
+// ---- amount math -----------------------------------------------------------
+
+// Blocks the client owes for, given where the stream is now: from the activation block
+// (the first in-window block the stream processed — lazily set by the dataplane) to the
+// current cursor block, inclusive, capped by the quoted budget. Never negative (the
+// cursor can sit behind an un-started intent during catch-up) — 0 blocks = $0 settle.
+export function blocksConsumed(
+  startBlockNum: number | null,
+  budgetBlocks: number,
+  cursorBlock: number | null,
+): number {
+  if (startBlockNum == null || cursorBlock == null) return 0;
+  return Math.max(0, Math.min(cursorBlock - startBlockNum + 1, budgetBlocks));
+}
+
+export function settleAmountAtomic(blocks: number, perBlockRateAtomic: string): string {
+  return (BigInt(Math.max(0, blocks)) * BigInt(perBlockRateAtomic)).toString();
+}
+
+// The money story for both settlement paths: what the 402 quoted (the ceiling), how
+// many of those blocks the stream actually processed, and what the voucher permitted.
+function moneyStory(
+  intent: {
+    maxLimitAtomic: string;
+    perBlockRateAtomic: string;
+    budgetBlocks: number;
+    startBlockNum: number | null;
+    paymentPayload: unknown;
+    eventsMatched: number;
+  },
+  cursorBlock: number | null,
+) {
   return {
     advertisedCeiling: intent.maxLimitAtomic,
     voucherPermitted: voucherPermittedAmount(intent.paymentPayload),
+    perBlockRateAtomic: intent.perBlockRateAtomic,
+    budgetBlocks: intent.budgetBlocks,
+    startBlockNum: intent.startBlockNum,
+    cursorBlock,
     eventsMatched: intent.eventsMatched,
   };
-}
-
-// ---- amount math -----------------------------------------------------------
-
-export function actualAmountAtomic(eventsMatched: number, ratePerEventAtomic: string, maxLimitAtomic: string): string {
-  const metered = BigInt(eventsMatched) * BigInt(ratePerEventAtomic);
-  return (metered > BigInt(maxLimitAtomic) ? BigInt(maxLimitAtomic) : metered).toString();
 }
 
 // ---- facilitator settle + receipt gate -------------------------------------
@@ -291,10 +319,12 @@ export async function executeSuccessSettlement(intentId: string): Promise<void> 
   const intent = await getIntent(intentId);
   if (!intent || !(await acquireToSettle(intent))) return;
 
-  const actual = actualAmountAtomic(intent.eventsMatched, intent.ratePerEventAtomic, intent.maxLimitAtomic);
+  const cursor = await getCursor();
+  const consumed = blocksConsumed(intent.startBlockNum, intent.budgetBlocks, cursor?.blockNum ?? null);
+  const actual = settleAmountAtomic(consumed, intent.perBlockRateAtomic);
   logger.info(
-    { intent: intentId, settleAtomic: actual, settleUsdc: formatUsdc(actual), ...moneyStory(intent) },
-    `settlement engine: success path — settling ${formatUsdc(actual)} USDC for ${intent.eventsMatched} event(s)`,
+    { intent: intentId, settleAtomic: actual, settleUsdc: formatUsdc(actual), blocksConsumed: consumed, ...moneyStory(intent, cursor?.blockNum ?? null) },
+    `settlement engine: success path — settling ${formatUsdc(actual)} USDC for ${consumed} processed block(s) (${intent.eventsMatched} event(s) delivered)`,
   );
   if (!intent.paymentPayload) {
     logger.error({ intent: intentId }, "MONITORING intent has no stored voucher — marking SETTLE_FAILED");
@@ -322,9 +352,10 @@ export async function executeSuccessSettlement(intentId: string): Promise<void> 
       txUrl,
       settledAtomic: outcome.amountAtomic,
       settledUsdc: formatUsdc(outcome.amountAtomic),
-      ...moneyStory(intent),
+      blocksConsumed: consumed,
+      ...moneyStory(intent, cursor?.blockNum ?? null),
     },
-    `settled ${formatUsdc(outcome.amountAtomic)} USDC — intent SETTLED — ${txUrl}`,
+    `settled ${formatUsdc(outcome.amountAtomic)} USDC for ${consumed} block(s) — intent SETTLED — ${txUrl}`,
   );
   if (!stored.webhookUrl) return;
   const { events, truncated } = eventsForWebhook(stored.matchedEvents, stored.eventsMatched);
@@ -346,17 +377,21 @@ export async function executeTimeoutSettlement(intentId: string): Promise<void> 
   const intent = await getIntent(intentId);
   if (!intent || !(await acquireToSettle(intent))) return;
 
-  const actual = actualAmountAtomic(intent.eventsMatched, intent.ratePerEventAtomic, intent.maxLimitAtomic);
+  const cursor = await getCursor();
+  const consumed = blocksConsumed(intent.startBlockNum, intent.budgetBlocks, cursor?.blockNum ?? null);
+  const actual = settleAmountAtomic(consumed, intent.perBlockRateAtomic);
   logger.info(
-    { intent: intentId, settleAtomic: actual, settleUsdc: formatUsdc(actual), ...moneyStory(intent) },
-    `settlement engine: timeout path — metered usage ${formatUsdc(actual)} USDC for ${intent.eventsMatched} event(s)`,
+    { intent: intentId, settleAtomic: actual, settleUsdc: formatUsdc(actual), blocksConsumed: consumed, ...moneyStory(intent, cursor?.blockNum ?? null) },
+    `settlement engine: timeout path — settling ${formatUsdc(actual)} USDC for ${consumed} processed block(s)`,
   );
 
-  // $0 timeout: nothing was metered, so nothing is settled — no on-chain tx, the
-  // Permit2 authorization simply expires (spike "zero" mode). Notify without data.
+  // $0 settle: the stream never processed an in-window block for this intent (stream
+  // down the whole window, or a hand-seeded row) — nothing was consumed, so nothing is
+  // settled: no on-chain tx, the Permit2 authorization simply expires. Notify without
+  // data (fail-closed: no settlement, no data).
   if (actual === "0") {
     await markTimeout(intent.id);
-    logger.info({ intent: intentId }, "timeout with zero metered usage — no settlement tx (authorization expires)");
+    logger.info({ intent: intentId }, "timeout with zero processed blocks — no settlement tx (authorization expires)");
     if (!intent.webhookUrl) return;
     await deliverWebhook(intent.webhookUrl, {
       type: "intent.timeout",
@@ -397,9 +432,10 @@ export async function executeTimeoutSettlement(intentId: string): Promise<void> 
       txUrl,
       settledAtomic: outcome.amountAtomic,
       settledUsdc: formatUsdc(outcome.amountAtomic),
-      ...moneyStory(intent),
+      blocksConsumed: consumed,
+      ...moneyStory(intent, cursor?.blockNum ?? null),
     },
-    `timeout settled ${formatUsdc(outcome.amountAtomic)} USDC — intent TIMEOUT — ${txUrl}`,
+    `timeout settled ${formatUsdc(outcome.amountAtomic)} USDC for ${consumed} block(s) — intent TIMEOUT — ${txUrl}`,
   );
   if (!stored.webhookUrl) return;
   const { events, truncated } = eventsForWebhook(stored.matchedEvents, stored.eventsMatched);
@@ -429,10 +465,13 @@ export async function executeTimeoutSettlement(intentId: string): Promise<void> 
 export async function runSettlementSweep(now = new Date()): Promise<number> {
   const candidates = await getSettlementCandidates(now);
   if (candidates.length === 0) return 0;
+  const cursor = await getCursor();
+  const cursorBlock = cursor?.blockNum ?? null;
   const results = await Promise.allSettled(
     candidates.map(async (intent) => {
-      const expired = intent.ttlTimestamp < now;
-      if (expired) {
+      // Window over (TTL or block budget — whichever ran out first) → timeout path;
+      // metered-but-unsettled → success path (lost-trigger recovery).
+      if (windowOver(intent, cursorBlock, now)) {
         await executeTimeoutSettlement(intent.id);
       } else if (intent.eventsMatched > 0) {
         await executeSuccessSettlement(intent.id);

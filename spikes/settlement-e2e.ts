@@ -147,10 +147,13 @@ assert((await waitForStatus(timeoutId, ["TIMEOUT"], 4 * 60_000)) === "TIMEOUT", 
 const timeoutIntent = await prisma.intent.findUnique({ where: { id: timeoutId } });
 const n2 = notices.find((n) => n.intent_id === timeoutId && n.type === "intent.timeout");
 assert(n2, "timeout beat delivered intent.timeout webhook");
-assert(timeoutIntent?.settlementTxHash == null, "zero-usage timeout must not move funds");
-assert(timeoutIntent?.settledAmountAtomic == null, "zero-usage timeout carries no charge");
-assert((n2.events ?? []).length === 0, "zero-usage timeout notice carries no event data");
-console.log("beat 2 PASS — $0 timeout: no tx, authorization expires, notice without data");
+// per-block billing: the idle window settles the blocks it actually processed
+assert(timeoutIntent?.settlementTxHash, "idle timeout settles the processed blocks on-chain");
+assert((timeoutIntent?.settledAmountAtomic ?? "") !== "", "idle timeout carries the block charge");
+assert((n2.events ?? []).length === 0, "idle timeout notice carries no event data (nothing fired)");
+console.log(
+  `beat 2 PASS — idle window settled ${timeoutIntent?.settledAmountAtomic} atomic for its blocks: https://sepolia.basescan.org/tx/${timeoutIntent?.settlementTxHash}`,
+);
 
 console.log("\nPHASE 4 E2E PASS — settlement engine verified end-to-end");
 await prisma.$disconnect();

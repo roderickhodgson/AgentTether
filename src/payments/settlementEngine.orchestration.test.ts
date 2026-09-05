@@ -18,6 +18,9 @@ const TX = "0xsettlementtx";
 vi.mock("../db.js", () => ({
   getIntent: vi.fn(),
   getSettlementCandidates: vi.fn(),
+  getCursor: vi.fn(),
+  setStartBlockNum: vi.fn(),
+  windowOver: vi.fn(),
   claimForSettlement: vi.fn(),
   claimStaleSettlement: vi.fn(),
   markSettled: vi.fn(),
@@ -41,7 +44,7 @@ const requirements = {
   scheme: "upto",
   network: "eip155:84532",
   asset: "0xusdc",
-  amount: "92900",
+  amount: "5000",
   payTo: RECEIVER,
   maxTimeoutSeconds: 720,
   extra: { name: "USDC", version: "2", facilitatorAddress: "0xfac" },
@@ -65,8 +68,10 @@ function intentFixture(over: Partial<Intent> = {}): Intent {
     agentWallet: AGENT,
     targetContract: "0xtoken",
     eventsMatched: 38,
-    ratePerEventAtomic: "1858",
-    maxLimitAtomic: "92900",
+    perBlockRateAtomic: "100",
+    budgetBlocks: 50,
+    startBlockNum: 1000,
+    maxLimitAtomic: "5000",
     paymentNonce: "123",
     paymentPayload: { accepted: requirements, payload: { permit2Authorization: { nonce: "123" } } },
     eventCondition: { minAmount: "1" },
@@ -94,6 +99,7 @@ beforeEach(() => {
   webhookFailures = 0;
   mockedDb.claimForSettlement.mockResolvedValue(true);
   mockedDb.claimStaleSettlement.mockResolvedValue(true);
+  mockedDb.getCursor.mockResolvedValue({ id: "singleton", cursor: "0xtest", blockNum: 1037, updatedAt: new Date() });
   mockedDb.getIntent.mockImplementation(async (id: string) => intentFixture({ id }));
   mockedDb.markSettled.mockImplementation(async (id: string, tx: string, amount: string) =>
     intentFixture({ id, status: "SETTLED", settlementTxHash: tx, settledAmountAtomic: amount }));
@@ -132,9 +138,9 @@ describe("executeSuccessSettlement", () => {
     // settle called with the voucher's accepted requirements and the capped actual
     expect(mockedSettle).toHaveBeenCalledWith(
       expect.objectContaining({ payload: expect.anything() }),
-      expect.objectContaining({ amount: "70604" }),
+      expect.objectContaining({ amount: "3800" }),
     );
-    expect(mockedDb.markSettled).toHaveBeenCalledWith("i1", TX, "70604");
+    expect(mockedDb.markSettled).toHaveBeenCalledWith("i1", TX, "3800");
     expect(mockedDb.markSettleFailed).not.toHaveBeenCalled();
     expect(mockedDb.markTimeout).not.toHaveBeenCalled();
 
@@ -146,7 +152,7 @@ describe("executeSuccessSettlement", () => {
       agent_wallet: AGENT,
       pay_to: RECEIVER,
       tx_hash: TX,
-      amount_charged_atomic: "70604",
+      amount_charged_atomic: "3800",
       events_matched: 38,
       // the fixture stores 1 event against 38 matched — the cap/truncation flag in action
       events_truncated: true,
@@ -179,8 +185,8 @@ describe("executeSuccessSettlement", () => {
     mockedDb.getIntent.mockResolvedValue(intentFixture({ status: "SETTLING" }));
     await executeSuccessSettlement("i1");
     expect(mockedDb.claimStaleSettlement).toHaveBeenCalledWith("i1");
-    expect(mockedSettle).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ amount: "70604" }));
-    expect(mockedDb.markSettled).toHaveBeenCalledWith("i1", TX, "70604");
+    expect(mockedSettle).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ amount: "3800" }));
+    expect(mockedDb.markSettled).toHaveBeenCalledWith("i1", TX, "3800");
   });
 
   it("a not-yet-stale SETTLING claim is left alone — the in-flight settle owns it", async () => {
@@ -234,7 +240,7 @@ describe("executeSuccessSettlement", () => {
     const pending = executeSuccessSettlement("i1");
     await vi.advanceTimersByTimeAsync(60_000); // 3 attempts × (10s timeout + 2s backoff) worst case
     await pending;
-    expect(mockedDb.markSettled).toHaveBeenCalledWith("i1", TX, "70604");
+    expect(mockedDb.markSettled).toHaveBeenCalledWith("i1", TX, "3800");
     const webhookAttempts = fetchMock.mock.calls.filter(([u]) => String(u).includes("9099")).length;
     expect(webhookAttempts).toBe(3); // delivery attempts only — the receipt poll is a separate fetch
   });
@@ -249,7 +255,7 @@ describe("executeSuccessSettlement", () => {
 
 describe("executeTimeoutSettlement", () => {
   it("zero metered usage → $0: no settle call, TIMEOUT, notice without data", async () => {
-    mockedDb.getIntent.mockResolvedValue(intentFixture({ eventsMatched: 0, matchedEvents: [] }));
+    mockedDb.getIntent.mockResolvedValue(intentFixture({ eventsMatched: 0, matchedEvents: [], startBlockNum: null }));
     await executeTimeoutSettlement("i1");
     expect(mockedSettle).not.toHaveBeenCalled();
     expect(mockedDb.markTimeout).toHaveBeenCalledWith("i1");
@@ -261,17 +267,18 @@ describe("executeTimeoutSettlement", () => {
 
   it("metered usage → settles the actual and delivers the data (metered timeout branch)", async () => {
     await executeTimeoutSettlement("i1");
-    expect(mockedSettle).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ amount: "70604" }));
-    expect(mockedDb.markTimeout).toHaveBeenCalledWith("i1", "70604", TX);
+    expect(mockedSettle).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ amount: "3800" }));
+    expect(mockedDb.markTimeout).toHaveBeenCalledWith("i1", "3800", TX);
     const notice = webhookCalls[0]?.body;
-    expect(notice).toMatchObject({ type: "intent.timeout", tx_hash: TX, amount_charged_atomic: "70604" });
+    expect(notice).toMatchObject({ type: "intent.timeout", tx_hash: TX, amount_charged_atomic: "3800" });
     expect((notice?.events as unknown[]) ?? []).toHaveLength(1);
   });
 });
 
 describe("runSettlementSweep (dispatch)", () => {
-  it("expired candidates go to the timeout path, metered-but-unsettled to the success path", async () => {
+  it("window-over candidates go to the timeout path, metered-but-unsettled to the success path", async () => {
     const now = new Date();
+    mockedDb.windowOver.mockImplementation((intent: { ttlTimestamp: Date }) => intent.ttlTimestamp.getTime() < Date.now());
     mockedDb.getSettlementCandidates.mockResolvedValue([
       intentFixture({ id: "expired", ttlTimestamp: new Date(now.getTime() - 1000) }),
       intentFixture({ id: "lost-trigger", ttlTimestamp: new Date(now.getTime() + 600_000) }),

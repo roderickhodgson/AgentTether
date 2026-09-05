@@ -19,6 +19,7 @@ import type { Prisma } from "@prisma/client";
 import type { Request, Response } from "express";
 import { createIntent, getIntent, getIntentByPaymentNonce, storeVerifiedPayment } from "../db.js";
 import { discoverUpto, facilitator, NETWORK, USDC_ADDRESS, PAY_TO_ADDRESS, voucherPermittedAmount } from "../payments/facilitator.js";
+import { quoteWindow, perBlockRateAtomic, blockTimeSeconds } from "../payments/pricing.js";
 import { logger } from "../logger.js";
 
 // Permit2 deadlines must outlive the monitoring window: cron sweeps run every minute
@@ -31,20 +32,13 @@ export const DEADLINE_BUFFER_S = 120;
 export function isAcceptableWebhook(url: string): boolean {
   return /^https:\/\//.test(url) || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?([/?#]|$)/.test(url);
 }
-// Heuristic for ceiling estimation when the agent doesn't pass max_limit_atomic:
-// expected matching events per minute on the watched contract (mainnet USDC at the
-// demo threshold runs ~4–10/min; 5 is the conservative middle).
-export const EST_MATCHES_PER_MIN = 5;
 
-// SERVER-OWNED PRICING: the per-event rate is our price list (COGS + margin), never a
-// client input — a client-set rate would let the agent underprice our delivery to
-// ~zero while the per-block Substreams cost stays fixed. The client owns exactly one
-// number: max_limit_atomic, their worst-case spend commitment. The rate is frozen on
-// the intent at creation, so price changes never reprice an active window.
-// Provenance: 1858 was the day-1 deferred-settle spike's demo amount, adopted as the
-// default. TODO before Phase 5 pricing is finalized: derive a rate floor from the
-// Substreams COGS ($1.75/1M blocks ÷ expected matches per block) plus margin.
-export const RATE_PER_EVENT = process.env.RATE_PER_EVENT_ATOMIC ?? "1858";
+// SERVER-OWNED PRICING (per-block model): the client buys a monitoring window
+// (ttl_seconds); the backend meters the blocks it actually processes and settles
+// exactly those, pro-rata, capped by the quoted ceiling. The rate is our price list
+// (COGS + margin), never a client input; the ceiling is quoted, never sent. The
+// window terminates at whichever runs out first — the block budget or the TTL.
+// Rate-floor TODO: derive from Substreams COGS ($1.75/1M blocks ÷ chain block time).
 export const MIN_TTL_S = 60;
 export const MAX_TTL_S = 86_400;
 
@@ -54,30 +48,13 @@ type StreamIntentBody = {
   event_condition?: { minAmount?: string };
   ttl_seconds?: number;
   webhook_url?: string;
+  // Accepted only to be rejected: pricing is server-owned (see above).
   rate_per_event_atomic?: string;
   max_limit_atomic?: string;
 };
 
 const isHexAddress = (v: string) => /^0x[0-9a-fA-F]{40}$/.test(v);
 const isAtomicString = (v: string | undefined) => typeof v === "string" && /^\d+$/.test(v);
-
-// Pure ceiling computation (extracted for the test suite): clamps TTL into
-// [MIN_TTL_S, MAX_TTL_S], and estimates the ceiling as rate × expected-matches
-// (minutes × EST_MATCHES_PER_MIN) unless the agent sets their own ceiling. The rate
-// is the server's (see SERVER-OWNED PRICING above) — injectable here for tests.
-export function computeCeiling(
-  body: Pick<StreamIntentBody, "ttl_seconds" | "max_limit_atomic">,
-  rate: string = RATE_PER_EVENT,
-): { ttl: number; rate: string; maxLimit: string } {
-  const requested = Number(body.ttl_seconds ?? 0);
-  // NaN-safe clamp: Number.isFinite guards BigInt(...) downstream (unreachable via the
-  // API — validation 400s first — but this function is the pure source of truth).
-  const ttl = Number.isFinite(requested) ? Math.min(MAX_TTL_S, Math.max(MIN_TTL_S, Math.floor(requested))) : MIN_TTL_S;
-  const maxLimit = isAtomicString(body.max_limit_atomic)
-    ? body.max_limit_atomic!
-    : (BigInt(rate) * BigInt(Math.max(1, Math.ceil(ttl / 60)) * EST_MATCHES_PER_MIN)).toString();
-  return { ttl, rate, maxLimit };
-}
 
 function resourceUrl(req: Request, intentId: string): string {
   const host = req.get("host") ?? `localhost:${process.env.PORT ?? 8080}`;
@@ -97,20 +74,28 @@ function paymentRequiredResponse(res: Response, paymentRequired: PaymentRequired
 // Requirements are authoritative from OUR side: the client must sign exactly this
 // ceiling, payTo, asset and facilitator binding. `maxTimeoutSeconds` mirrors what was
 // advertised in the 402 (ttl + buffer) — it is the client's Permit2 deadline hint.
+// The quote travels in `extra` so the client's money story is part of what it signs.
 async function streamRequirements(body: StreamIntentBody) {
-  const { ttl, rate, maxLimit } = computeCeiling(body);
+  const quote = quoteWindow(body.ttl_seconds);
   const { facilitatorAddress } = await discoverUpto();
 
   const requirements: PaymentRequirements = {
     scheme: "upto",
     network: NETWORK,
     asset: USDC_ADDRESS,
-    amount: maxLimit,
+    amount: quote.ceilingAtomic,
     payTo: PAY_TO_ADDRESS,
-    maxTimeoutSeconds: ttl + DEADLINE_BUFFER_S,
-    extra: { name: "USDC", version: "2", facilitatorAddress },
+    maxTimeoutSeconds: quote.ttl + DEADLINE_BUFFER_S,
+    extra: {
+      name: "USDC",
+      version: "2",
+      facilitatorAddress,
+      perBlockRateAtomic: perBlockRateAtomic().toString(),
+      budgetBlocks: quote.budgetBlocks,
+      blockTimeSeconds: blockTimeSeconds(),
+    },
   };
-  return { requirements, ttl, maxLimit, rate };
+  return { requirements, ttl: quote.ttl, maxLimit: quote.ceilingAtomic, budgetBlocks: quote.budgetBlocks };
 }
 
 export function advertisedMaxTimeoutSeconds(ttlSeconds: number): number {
@@ -139,8 +124,8 @@ async function createIntentHandler(req: Request, res: Response) {
   const problems: string[] = [];
   if (!body.query_intent || typeof body.query_intent !== "string") problems.push("query_intent (string) is required");
   if (!body.target_contract || !isHexAddress(body.target_contract)) problems.push("target_contract (0x address) is required");
-  if (body.rate_per_event_atomic !== undefined) {
-    problems.push("rate_per_event_atomic is set by the server — pricing is our decision (COGS + margin), do not send it");
+  if (body.rate_per_event_atomic !== undefined || body.max_limit_atomic !== undefined) {
+    problems.push("pricing is server-owned: the ceiling is quoted from ttl_seconds (per-block rate × budget) — do not send rate_per_event_atomic or max_limit_atomic");
   }
   if (!body.event_condition || !isAtomicString(body.event_condition.minAmount)) {
     problems.push("event_condition.minAmount (atomic-unit string) is required");
@@ -156,13 +141,14 @@ async function createIntentHandler(req: Request, res: Response) {
     return;
   }
 
-  const { requirements, ttl, maxLimit } = await streamRequirements(body);
+  const { requirements, ttl, maxLimit, budgetBlocks } = await streamRequirements(body);
   const intent = await createIntent({
     agentWallet: "unknown",
     targetContract: body.target_contract!,
     ttlTimestamp: new Date(Date.now() + ttl * 1000),
     maxLimitAtomic: maxLimit,
-    ratePerEventAtomic: RATE_PER_EVENT,
+    perBlockRateAtomic: perBlockRateAtomic().toString(),
+    budgetBlocks,
     eventCondition: body.event_condition as { minAmount: string },
     webhookUrl: body.webhook_url,
   });
@@ -176,13 +162,15 @@ async function createIntentHandler(req: Request, res: Response) {
   logger.info(
     {
       intent: intent.id,
-      // the 402 story: this is the ceiling the agent must be willing to sign
+      // the 402 story: the quoted ceiling = budgetBlocks × perBlockRate
       paymentRequiredAtomic: maxLimit,
+      budgetBlocks,
+      perBlockRateAtomic: perBlockRateAtomic().toString(),
       payTo: PAY_TO_ADDRESS,
       network: NETWORK,
       ttl,
     },
-    `intent created — 402 issued: up to ${maxLimit} atomic USDC required (ttl ${ttl}s), awaiting signed voucher`,
+    `intent created — 402 issued: up to ${maxLimit} atomic USDC (${budgetBlocks} blocks × ${perBlockRateAtomic()} rate, ttl ${ttl}s), awaiting signed voucher`,
   );
 }
 
@@ -236,7 +224,14 @@ async function verifySignedPayment(req: Request, res: Response, signature: strin
     amount: intent.maxLimitAtomic,
     payTo: PAY_TO_ADDRESS,
     maxTimeoutSeconds: advertisedMaxTimeoutSeconds(advertisedTtlS),
-    extra: { name: "USDC", version: "2", facilitatorAddress },
+    extra: {
+      name: "USDC",
+      version: "2",
+      facilitatorAddress,
+      perBlockRateAtomic: intent.perBlockRateAtomic,
+      budgetBlocks: intent.budgetBlocks,
+      blockTimeSeconds: blockTimeSeconds(),
+    },
   };
   const paymentRequired: PaymentRequired = {
     x402Version: 2,

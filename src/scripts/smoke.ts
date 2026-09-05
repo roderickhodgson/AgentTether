@@ -21,7 +21,8 @@ const intent = await createIntent({
   targetContract: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
   ttlTimestamp: new Date(Date.now() - 1000),
   maxLimitAtomic: "5000000",
-  ratePerEventAtomic: "1858",
+  perBlockRateAtomic: "100",
+  budgetBlocks: 50000,
   eventCondition: { minAmount: "100000000000" },
 });
 console.log("created:", intent.status, "| nonce null:", intent.paymentNonce === null);
@@ -63,7 +64,8 @@ const timeoutIntent = await createIntent({
   targetContract: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
   ttlTimestamp: new Date(Date.now() - 1000),
   maxLimitAtomic: "5000000",
-  ratePerEventAtomic: "1858",
+  perBlockRateAtomic: "100",
+  budgetBlocks: 50000,
   eventCondition: { minAmount: "100000000000" },
 });
 await storeVerifiedPayment(timeoutIntent.id, "0xsmoke-nonce-timeout", { spike: true });

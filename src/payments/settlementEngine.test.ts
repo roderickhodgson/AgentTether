@@ -5,24 +5,28 @@
  * every fixture below was observed against the hosted facilitator (see README 4.4).
  */
 import { describe, expect, it } from "vitest";
-import { actualAmountAtomic, classifySettleRejection, eventsForWebhook } from "./settlementEngine.js";
+import { blocksConsumed, classifySettleRejection, eventsForWebhook, settleAmountAtomic } from "./settlementEngine.js";
 
-describe("actualAmountAtomic (metered usage, capped at the ceiling)", () => {
-  it("multiplies matched events by the rate", () => {
-    expect(actualAmountAtomic(38, "1858", "1000000000")).toBe("70604"); // live-verified settle (d1cff515)
-    expect(actualAmountAtomic(18, "1858", "1000000000")).toBe("33444"); // the first live settle
-    expect(actualAmountAtomic(0, "1858", "5000000")).toBe("0");
+describe("blocksConsumed / settleAmountAtomic (per-block meter, capped at the quote)", () => {
+  it("counts activation → cursor inclusive: the canonical 263-of-10,000 pro-rata case", () => {
+    expect(blocksConsumed(50_000, 10_000, 50_262)).toBe(263);
+    expect(settleAmountAtomic(263, "100")).toBe("26300");
   });
 
-  it("caps at max_limit_atomic — the upto ceiling, never a charge beyond it", () => {
-    expect(actualAmountAtomic(1_000_000, "1858", "5000000")).toBe("5000000");
-    expect(actualAmountAtomic(2700, "1858", "5000000")).toBe("5000000"); // exactly over
+  it("caps at the quoted budget — fast chains never bill past the quote", () => {
+    expect(blocksConsumed(1000, 300, 5000)).toBe(300);
+    expect(settleAmountAtomic(300, "100")).toBe("30000");
   });
 
-  it("handles bigint-scale numbers without float damage", () => {
-    expect(actualAmountAtomic(999_999_999, "1858", "999999999999999999999999")).toBe(
-      String(999_999_999n * 1858n),
-    );
+  it("never counts before activation or without a cursor — 0 blocks = $0 settle", () => {
+    expect(blocksConsumed(1000, 300, 500)).toBe(0);
+    expect(blocksConsumed(null, 300, 5000)).toBe(0);
+    expect(blocksConsumed(1000, 300, null)).toBe(0);
+    expect(settleAmountAtomic(0, "100")).toBe("0");
+  });
+
+  it("handles bigint-scale budgets without float damage", () => {
+    expect(settleAmountAtomic(999_999_999, "1858")).toBe(String(999_999_999n * 1858n));
   });
 });
 

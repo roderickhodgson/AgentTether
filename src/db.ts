@@ -9,7 +9,8 @@ export type CreateIntentInput = {
   targetContract: string;
   ttlTimestamp: Date;
   maxLimitAtomic: string;
-  ratePerEventAtomic: string;
+  perBlockRateAtomic: string;
+  budgetBlocks: number;
   eventCondition: Prisma.InputJsonValue;
   webhookUrl?: string;
 };
@@ -123,6 +124,14 @@ export async function getExpiredMonitoringIntents(now = new Date()) {
   });
 }
 
+// Billing starts at the FIRST in-window block the stream processes (lazily set by the
+// dataplane — during a catch-up replay, the intent only starts owing blocks once the
+// replay reaches its creation time). CAS on the null so concurrent blocks can't
+// double-set it.
+export async function setStartBlockNum(id: string, blockNum: number) {
+  await prisma.intent.updateMany({ where: { id, startBlockNum: null }, data: { startBlockNum: blockNum } });
+}
+
 // CAS claim (4.2's operational guard): exactly one concurrent invoker wins the
 // MONITORING → SETTLING transition; losers get false and no-op. The intent also drops
 // out of matching once non-MONITORING, so no further triggers fire.
@@ -182,15 +191,30 @@ export async function markTimeout(id: string, settledAmountAtomic?: string, sett
 //    consumed until settle succeeds, so a re-drive is safe; if settle DID succeed but the
 //    response was lost, the re-drive's nonce-consumed rejection is logged for the runbook,
 //    never auto-flipped to SETTLE_FAILED — money may have moved).
+// Window-over check (per-block billing): the intent's window ends at WHICHEVER runs
+// out first — the TTL (time) or the block budget (startBlockNum + budgetBlocks).
+// Used by the candidates query and the sweep's dispatch alike.
+export function windowOver(
+  intent: { ttlTimestamp: Date; startBlockNum: number | null; budgetBlocks: number },
+  cursorBlock: number | null,
+  now = new Date(),
+): boolean {
+  if (intent.ttlTimestamp < now) return true;
+  if (intent.startBlockNum != null && cursorBlock != null && cursorBlock >= intent.startBlockNum + intent.budgetBlocks) return true;
+  return false;
+}
+
 export async function getSettlementCandidates(now = new Date(), staleSettlingMs: number = STALE_SETTLING_MS) {
-  return prisma.intent.findMany({
-    where: {
-      OR: [
-        { status: "MONITORING", ttlTimestamp: { lt: now } },
-        { status: "MONITORING", eventsMatched: { gt: 0 } },
-        { status: "SETTLING", updatedAt: { lt: new Date(now.getTime() - staleSettlingMs) } },
-      ],
-    },
+  const [active, cursor] = await Promise.all([
+    prisma.intent.findMany({ where: { status: { in: ["MONITORING", "SETTLING"] } } }),
+    prisma.substreamsCursor.findUnique({ where: { id: "singleton" } }),
+  ]);
+  const cursorBlock = cursor?.blockNum ?? null;
+  const staleBefore = new Date(now.getTime() - staleSettlingMs);
+  return active.filter((intent) => {
+    if (intent.status === "SETTLING") return intent.updatedAt < staleBefore; // re-drive a dead claim
+    if (windowOver(intent, cursorBlock, now)) return true; // TTL or block budget ran out
+    return intent.eventsMatched > 0; // lost-trigger recovery
   });
 }
 

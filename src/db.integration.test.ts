@@ -27,7 +27,8 @@ async function seedIntent(over: Partial<Intent> = {}, nonceSuffix = ""): Promise
     targetContract: "0x00000000000000000000000000000000000000aa",
     ttlTimestamp: new Date(Date.now() + 600_000),
     maxLimitAtomic: "1000000",
-    ratePerEventAtomic: "10",
+    perBlockRateAtomic: "10",
+    budgetBlocks: 100000,
     eventCondition: { minAmount: "1" },
   });
   await db.storeVerifiedPayment(intent.id, `${NONCE}-${intent.id.slice(0, 8)}${nonceSuffix}`, { test: true });
@@ -71,7 +72,8 @@ d("db integration — settlement claim (CAS)", () => {
       targetContract: "0x00000000000000000000000000000000000000aa",
       ttlTimestamp: new Date(Date.now() + 600_000),
       maxLimitAtomic: "1000000",
-      ratePerEventAtomic: "10",
+      perBlockRateAtomic: "10",
+    budgetBlocks: 100000,
       eventCondition: { minAmount: "1" },
     });
     expect(await db.claimForSettlement(stillPending.id)).toBe(false);
@@ -156,7 +158,7 @@ d("db integration — getSettlementCandidates (the recovery set)", () => {
     );
     const freshStale = await seedIntent({ status: "SETTLING" }, "-fresh-stale"); // just claimed — not stale yet
     const healthy = await seedIntent(); // in-TTL, 0 events — nothing owed
-    const untouched = await db.createIntent({ agentWallet: AGENT, targetContract: "0x00", ttlTimestamp: new Date(Date.now() - 1000), maxLimitAtomic: "1", ratePerEventAtomic: "1", eventCondition: { minAmount: "1" } });
+    const untouched = await db.createIntent({ agentWallet: AGENT, targetContract: "0x00", ttlTimestamp: new Date(Date.now() - 1000), maxLimitAtomic: "1", perBlockRateAtomic: "1", budgetBlocks: 1, eventCondition: { minAmount: "1" } });
 
     const candidates = await db.getSettlementCandidates();
     const ids = new Set(candidates.map((c) => c.id));

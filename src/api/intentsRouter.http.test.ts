@@ -125,7 +125,7 @@ describe("3.2 — 402 issuance", () => {
   it("rejects client-set pricing — the rate is the server's decision, never a request field", async () => {
     const res = await post({ ...validBody, rate_per_event_atomic: "1" });
     expect(res.status).toBe(400);
-    expect(((await res.json()) as { problems: string[] }).problems.join(" ")).toMatch(/set by the server/);
+    expect(((await res.json()) as { problems: string[] }).problems.join(" ")).toMatch(/pricing is server-owned/);
   });
 
   it("rejects a non-https, non-loopback webhook_url (SSRF)", async () => {
@@ -151,14 +151,21 @@ describe("3.2 — 402 issuance", () => {
     const req = paymentRequired.accepts[0];
     expect(req.scheme).toBe("upto");
     expect(req.network).toBe("eip155:84532");
-    expect(req.amount).toBe("92900"); // 1858 × 10 min × 5 est matches — the live-observed ceiling for ttl 600
+    expect(req.amount).toBe("5000"); // 50 blocks (600s ÷ 12s) × 100 atomic — the quoted per-block ceiling
     expect(req.payTo).toBe(state.payTo);
     expect(req.maxTimeoutSeconds).toBe(720); // ttl + 120s deadline buffer
     expect(req.extra).toMatchObject({ facilitatorAddress: FACILITATOR_ADDRESS });
     expect(paymentRequired.resource.url).toContain("intent=intent-1");
 
     expect(mockedDb.createIntent).toHaveBeenCalledWith(
-      expect.objectContaining({ targetContract: validBody.target_contract, webhookUrl: undefined, agentWallet: "unknown", maxLimitAtomic: "92900" }),
+      expect.objectContaining({
+        targetContract: validBody.target_contract,
+        webhookUrl: undefined,
+        agentWallet: "unknown",
+        maxLimitAtomic: "5000",
+        perBlockRateAtomic: "100",
+        budgetBlocks: 50,
+      }),
     );
   });
 });

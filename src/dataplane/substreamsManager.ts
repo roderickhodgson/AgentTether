@@ -127,7 +127,7 @@ function heartbeat(clock: Clock) {
 }
 
 async function matchTransfers(message: JsonObject | undefined, clock: Clock): Promise<NormalizedEvent[]> {
-  const { getMonitoringIntents } = await import("../db.js");
+  const { getMonitoringIntents, setStartBlockNum } = await import("../db.js");
   const intents = await getMonitoringIntents();
   if (intents.length === 0) return [];
 
@@ -137,6 +137,19 @@ async function matchTransfers(message: JsonObject | undefined, clock: Clock): Pr
   const blockTime = new Date(blockTimestamp(clock));
   const blockTimeValid = !Number.isNaN(blockTime.getTime());
 
+  // Per-block billing starts at the FIRST in-window block the stream processes: lazily
+  // backfill startBlockNum here. During a catch-up replay this deliberately defers
+  // until the replay reaches the intent's creation time — pre-creation blocks are
+  // never billed (the matcher skips them anyway; this keeps the bill symmetric with
+  // the matching window).
+  for (const intent of intents) {
+    if (intent.startBlockNum == null && blockTimeValid && blockTime >= intent.createdAt) {
+      const blockNum = Number(clock.number);
+      await setStartBlockNum(intent.id, blockNum);
+      logger.info({ intent: intent.id, startBlockNum: blockNum }, "billing window opened — start block set");
+    }
+  }
+
   const transfers = (message as { transfers?: TransferEvent[] } | undefined)?.transfers ?? [];
   const out: NormalizedEvent[] = [];
   for (const t of transfers) {
@@ -144,6 +157,15 @@ async function matchTransfers(message: JsonObject | undefined, clock: Clock): Pr
       // Time guards live in matchesIntent: an absent/invalid block timestamp passes
       // null, which leaves both guards open (fail-open by design, see above).
       if (!matchesIntent(intent, t, blockTimeValid ? blockTime : null)) continue;
+      // Block-budget guard: the window ends when the quoted blocks are consumed —
+      // whichever runs out first (this or the TTL). Replayed catch-up blocks past the
+      // budget are skipped too, so catch-up work stops at the paid boundary.
+      if (
+        intent.startBlockNum != null &&
+        Number(clock.number) >= intent.startBlockNum + intent.budgetBlocks
+      ) {
+        continue;
+      }
       out.push({
         intentId: intent.id,
         chain: process.env.DATA_CHAIN ?? "ethereum-mainnet",
