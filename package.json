@@ -13,7 +13,8 @@
     "smoke": "tsx src/scripts/smoke.ts",
     "fixture": "tsx src/scripts/fixture.ts",
     "stream": "tsx src/dataplane/substreamsManager.ts",
-    "reset": "tsx src/scripts/reset.ts"
+    "reset": "tsx src/scripts/reset.ts",
+    "wallet-check": "tsx src/scripts/wallet-check.ts"
   },
   "repository": {
     "type": "git",

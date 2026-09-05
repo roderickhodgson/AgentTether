@@ -26,6 +26,7 @@ Guidance for AI coding agents (and humans) working on this repo. The README is t
 | `npm run fixture` | Seeds a fresh `MONITORING` intent on mainnet USDC (simulates a paid intent; one new intent per run) |
 | `npm run stream` | Runs the data-plane stream standalone (reconnect loop, cursor resume, metering) |
 | `npm run reset` | Demo reset: deletes all intents + the cursor (confirm prompt, `-- --force` to skip) so the next stream starts fresh from head |
+| `npm run wallet-check` | Read-only report: ETH/USDC balances + Permit2 allowance for `AGENT_WALLET` and `PAY_TO_ADDRESS` (plain JSON-RPC, no tx, no web3 dep) |
 | `npm run dev` / `start` | Express backend (`/healthz`) |
 
 ## Architecture facts (rediscovering these is expensive)
