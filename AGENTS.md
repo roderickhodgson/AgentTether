@@ -25,6 +25,7 @@ Guidance for AI coding agents (and humans) working on this repo. The README is t
 | `npm run smoke` | DB CRUD lifecycle test against Neon (writes + deletes a row — don't run concurrently with a live demo) |
 | `npm run fixture` | Seeds a fresh `MONITORING` intent on mainnet USDC (simulates a paid intent; one new intent per run) |
 | `npm run stream` | Runs the data-plane stream standalone (reconnect loop, cursor resume, metering) |
+| `npm run reset` | Demo reset: deletes all intents + the cursor (confirm prompt, `-- --force` to skip) so the next stream starts fresh from head |
 | `npm run dev` / `start` | Express backend (`/healthz`) |
 
 ## Architecture facts (rediscovering these is expensive)
