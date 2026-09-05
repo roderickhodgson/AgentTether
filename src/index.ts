@@ -2,9 +2,12 @@ import "dotenv/config";
 import express from "express";
 import { prisma } from "./db.js";
 import { logger } from "./logger.js";
+import { intentsRouter } from "./intentsRouter.js";
+import { startSubstreams } from "./substreamsManager.js";
 
 const app = express();
 app.use(express.json());
+app.use(intentsRouter);
 
 app.get("/healthz", async (_req, res) => {
   try {
@@ -18,4 +21,11 @@ app.get("/healthz", async (_req, res) => {
 const port = Number(process.env.PORT ?? 8080);
 app.listen(port, () => {
   logger.info(`AgentTether backend listening on :${port}`);
+});
+
+// The data plane lives inside the Express process (2.1: one long-lived stream serves
+// all intents). It starts alongside the API; a stream failure logs and retries via the
+// manager's own loop, and a missing API key degrades to API-only rather than exiting.
+startSubstreams().catch((e) => {
+  logger.error({ err: e instanceof Error ? e.message : e }, "substreams stream unavailable — API continues without it");
 });
