@@ -48,3 +48,26 @@ model SubstreamsCursor {
 
   @@map("substreams_cursor")
 }
+
+// Rolling capture of transfers for the oneshot lookback endpoint — filtered to the
+// allowlisted contracts at capture time (ONESHOT_CONTRACTS), pruned past the retention
+// window by the sweep. Written in the same per-block transaction as metering + the
+// cursor, so the cursor never advances past uncaptured blocks.
+model ProcessedTransfer {
+  id             String   @id @default(uuid())
+  chain          String
+  blockNum       Int      @map("block_num")
+  blockTimestamp DateTime @map("block_timestamp")
+  txHash         String   @map("tx_hash")
+  logIndex       Int      @map("log_index")
+  contract       String
+  from           String
+  to             String
+  amount         BigInt
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@unique([blockNum, txHash, logIndex])
+  @@index([contract, blockNum])
+  @@index([createdAt])
+  @@map("processed_transfers")
+}

@@ -12,6 +12,7 @@
 import "dotenv/config";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Intent } from "@prisma/client";
+import type { CaptureTransferInput } from "./db.js";
 
 process.env.DATABASE_URL = process.env.TEST_DATABASE_URL ?? "postgresql://placeholder:placeholder@localhost:5432/placeholder";
 
@@ -20,6 +21,7 @@ const d = process.env.TEST_DATABASE_URL ? describe : describe.skip;
 
 const AGENT = "test-suite-agent";
 const NONCE = `test-nonce-${Date.now()}`;
+const TEST_CONTRACT = "0xtest-allowlist";
 
 async function seedIntent(over: Partial<Intent> = {}, nonceSuffix = ""): Promise<Intent> {
   const intent = await db.createIntent({
@@ -57,6 +59,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await db.prisma.intent.deleteMany({ where: { agentWallet: AGENT } });
+  await db.prisma.processedTransfer.deleteMany({ where: { contract: { in: [TEST_CONTRACT, "0xother"] } } });
   await db.prisma.$disconnect();
 });
 
@@ -168,5 +171,79 @@ d("db integration — getSettlementCandidates (the recovery set)", () => {
     expect(ids.has(freshStale.id)).toBe(false);
     expect(ids.has(healthy.id)).toBe(false);
     expect(ids.has(untouched.id)).toBe(false);
+  });
+});
+
+d("db integration — oneshot capture + lookback (3.4)", () => {
+  const cap = (blockNum: number, logIndex: number, over: Partial<CaptureTransferInput> = {}): CaptureTransferInput => ({
+    chain: "ethereum-mainnet",
+    blockNum,
+    blockTimestamp: new Date("2026-01-01T00:00:00Z"),
+    txHash: `0xcap${blockNum}-${logIndex}`,
+    logIndex,
+    contract: TEST_CONTRACT,
+    from: "0xfrom",
+    to: "0xto",
+    amount: 5n,
+    ...over,
+  });
+
+  it("captures in the same commit as metering + cursor, idempotent on replay", async () => {
+    await db.meterAndCommit(new Map(), [], "test-cursor-cap", 200, [cap(200, 0), cap(200, 1), cap(201, 0)]);
+    // a replayed block (crash reprocessing, post-undo re-capture) must not double-insert
+    await db.meterAndCommit(new Map(), [], "test-cursor-cap", 200, [cap(200, 0)]);
+    const n = await db.prisma.processedTransfer.count({ where: { contract: TEST_CONTRACT } });
+    expect(n).toBe(3);
+    const cursor = await db.getCursor();
+    expect(cursor?.blockNum).toBe(200);
+  });
+
+  it("lookback: window derives from the cursor head, filters contract + min amount, newest first", async () => {
+    await db.prisma.substreamsCursor.upsert({
+      where: { id: "singleton" },
+      create: { id: "singleton", cursor: "test-cursor-lookback", blockNum: 4000 },
+      update: { cursor: "test-cursor-lookback", blockNum: 4000 },
+    });
+    // spread: 3950 (in window), 3700 (exactly at the 300-block boundary — in), 3699 (out), 3960 other-contract (out)
+    await db.prisma.processedTransfer.createMany({
+      data: [
+        { ...cap(3950, 0), blockNum: 3950 },
+        { ...cap(3700, 0), blockNum: 3700 },
+        { ...cap(3699, 0), blockNum: 3699 },
+        { ...cap(3960, 0, { contract: "0xother" }), blockNum: 3960 },
+        { ...cap(3945, 0, { amount: 20n }), blockNum: 3945 },
+      ],
+      skipDuplicates: true,
+    });
+    const res = await db.lookbackTransfers({ contract: TEST_CONTRACT, maxLookbackBlocks: 300, limit: 100 });
+    expect(res.head?.blockNum).toBe(4000);
+    expect(res.window).toEqual({ fromBlock: 3700, toBlock: 4000 });
+    expect(res.transfers.map((t) => [t.blockNum, t.txHash])).toEqual([
+      [3950, "0xcap3950-0"],
+      [3945, "0xcap3945-0"],
+      [3700, "0xcap3700-0"],
+    ]);
+
+    const bigOnly = await db.lookbackTransfers({ contract: TEST_CONTRACT, minAmountAtomic: 10n, maxLookbackBlocks: 300, limit: 100 });
+    expect(bigOnly.transfers.map((t) => t.blockNum)).toEqual([3945]);
+
+    const capped = await db.lookbackTransfers({ contract: TEST_CONTRACT, maxLookbackBlocks: 300, limit: 1 });
+    expect(capped.transfers).toHaveLength(1);
+    expect(capped.transfers[0].blockNum).toBe(3950);
+  });
+
+  it("prunes by retention age and above reverted cursors", async () => {
+    await db.prisma.processedTransfer.createMany({
+      data: [
+        { ...cap(3900, 0), blockNum: 3900, createdAt: new Date(Date.now() - 3 * 3_600_000) }, // old age, in window
+        { ...cap(5001, 0), blockNum: 5001 }, // fresh
+        { ...cap(9001, 0), blockNum: 9001 }, // post-undo garbage
+      ],
+      skipDuplicates: true,
+    });
+    expect(await db.pruneProcessedTransfers(2)).toBe(1); // only the 3h-old row goes
+    expect(await db.prisma.processedTransfer.count({ where: { blockNum: 3900 } })).toBe(0);
+    expect(await db.pruneCapturesAboveBlock(4000)).toBe(2); // both above-cutoff rows go
+    expect(await db.prisma.processedTransfer.count({ where: { blockNum: { gt: 4000 } } })).toBe(0);
   });
 });

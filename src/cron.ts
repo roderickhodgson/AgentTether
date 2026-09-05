@@ -10,7 +10,14 @@
  */
 import cron from "node-cron";
 import { runSettlementSweep } from "./payments/settlementEngine.js";
+import { pruneProcessedTransfers } from "./db.js";
+import { oneshotRetentionHours } from "./payments/pricing.js";
 import { logger } from "./logger.js";
+
+async function maintenancePass(): Promise<void> {
+  const pruned = await pruneProcessedTransfers(oneshotRetentionHours());
+  if (pruned > 0) logger.info({ pruned }, "capture retention prune");
+}
 
 export async function startSettlementSweeps(): Promise<void> {
   try {
@@ -19,11 +26,19 @@ export async function startSettlementSweeps(): Promise<void> {
   } catch (e) {
     logger.error({ err: e instanceof Error ? e.message : e }, "startup settlement sweep failed — continuing (the minute cron will retry)");
   }
+  try {
+    await maintenancePass();
+  } catch (e) {
+    logger.error({ err: e instanceof Error ? e.message : e }, "startup capture prune failed — continuing (the minute cron will retry)");
+  }
 
   const schedule = process.env.SETTLEMENT_SWEEP_CRON ?? "* * * * *";
   cron.schedule(schedule, () => {
     runSettlementSweep().catch((e) =>
       logger.error({ err: e instanceof Error ? e.message : e }, "settlement sweep pass failed"),
+    );
+    maintenancePass().catch((e) =>
+      logger.error({ err: e instanceof Error ? e.message : e }, "capture prune pass failed"),
     );
   });
   logger.info({ schedule }, "settlement minute sweep scheduled");

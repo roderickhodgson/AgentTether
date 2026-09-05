@@ -80,11 +80,26 @@ export type MatchEventInput = {
 
 export type PersistedMatchedEvent = Omit<MatchEventInput, "intentId" | "block"> & { block: number };
 
+// Oneshot capture row — allowlist-filtered by the dataplane, written per block inside
+// the same transaction as metering + the cursor.
+export type CaptureTransferInput = {
+  chain: string;
+  blockNum: number | bigint;
+  blockTimestamp: Date;
+  txHash: string;
+  logIndex: number;
+  contract: string;
+  from: string;
+  to: string;
+  amount: bigint;
+};
+
 export async function meterAndCommit(
   byIntent: Map<string, number>,
   events: MatchEventInput[],
   cursor: string,
   blockNum: number,
+  capture: CaptureTransferInput[] = [],
 ) {
   return prisma.$transaction(async (tx) => {
     const totals = new Map<string, number>();
@@ -105,6 +120,26 @@ export async function meterAndCommit(
       });
       totals.set(intentId, updated.eventsMatched);
     }
+    // Oneshot lookback capture (3.4): pre-filtered to the allowlist by the dataplane,
+    // inserted in the SAME transaction as the cursor — the cursor never advances past
+    // uncaptured blocks. skipDuplicates + the (block, tx, log) unique key make replays
+    // and post-undo reprocessing idempotent.
+    if (capture.length > 0) {
+      await tx.processedTransfer.createMany({
+        data: capture.map((c) => ({
+          chain: c.chain,
+          blockNum: Number(c.blockNum),
+          blockTimestamp: c.blockTimestamp,
+          txHash: c.txHash,
+          logIndex: c.logIndex,
+          contract: c.contract,
+          from: c.from,
+          to: c.to,
+          amount: c.amount,
+        })),
+        skipDuplicates: true,
+      });
+    }
     await tx.substreamsCursor.upsert({
       where: { id: "singleton" },
       create: { id: "singleton", cursor, blockNum },
@@ -112,6 +147,46 @@ export async function meterAndCommit(
     });
     return totals;
   });
+}
+
+// Lookback query for the oneshot endpoint: the most recent `maxLookbackBlocks` behind
+// the stream cursor, filtered to one contract (and optionally a minimum amount — the
+// column is BigInt so the comparison is exact server-side), newest first.
+export async function lookbackTransfers(params: {
+  contract: string;
+  minAmountAtomic?: bigint;
+  maxLookbackBlocks: number;
+  limit: number;
+}) {
+  const head = await prisma.substreamsCursor.findUnique({ where: { id: "singleton" } });
+  if (!head) return { head: null as { blockNum: number } | null, window: null as { fromBlock: number; toBlock: number } | null, transfers: [] };
+  const fromBlock = Math.max(0, head.blockNum - params.maxLookbackBlocks);
+  const transfers = await prisma.processedTransfer.findMany({
+    where: {
+      chain: process.env.DATA_CHAIN ?? "ethereum-mainnet",
+      contract: params.contract.toLowerCase(),
+      blockNum: { gte: fromBlock, lte: head.blockNum },
+      ...(params.minAmountAtomic !== undefined ? { amount: { gte: params.minAmountAtomic } } : {}),
+    },
+    orderBy: [{ blockNum: "desc" }, { logIndex: "asc" }],
+    take: params.limit,
+  });
+  return { head: { blockNum: head.blockNum }, window: { fromBlock, toBlock: head.blockNum }, transfers };
+}
+
+// Retention prune for the capture table — called by the sweeps (startup + minute).
+export async function pruneProcessedTransfers(retentionHours: number) {
+  const res = await prisma.processedTransfer.deleteMany({
+    where: { createdAt: { lt: new Date(Date.now() - retentionHours * 3_600_000) } },
+  });
+  return res.count;
+}
+
+// Post-undo cleanup: captured rows above the reverted cursor belong to undone blocks —
+// the replay re-captures them, so anything above the cursor head is garbage.
+export async function pruneCapturesAboveBlock(blockNum: number) {
+  const res = await prisma.processedTransfer.deleteMany({ where: { blockNum: { gt: blockNum } } });
+  return res.count;
 }
 
 export async function getMonitoringIntents() {

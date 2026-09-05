@@ -48,3 +48,35 @@ export function quoteWindow(
   const budgetBlocks = Math.max(1, Math.ceil(ttl / blockTimeS));
   return { ttl, budgetBlocks, ceilingAtomic: (BigInt(budgetBlocks) * rate).toString() };
 }
+
+// ── Oneshot pull endpoint (3.4) ─────────────────────────────────────────────
+// The contrasting product: flat fee, immediate response, no TTL, no metering. The
+// dataplane rolls a bounded capture of allowlisted contracts (written per block in the
+// same transaction as metering), and the endpoint queries it for a lookback window.
+// Prices are server-owned env config, same as the per-block rate.
+
+// Comma-separated allowlist, lowercased for comparisons against stream events.
+export function oneshotContracts(): string[] {
+  return (process.env.ONESHOT_CONTRACTS ?? "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48")
+    .split(",")
+    .map((c) => c.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+export function oneshotLookbackBlocksMax(): number {
+  return Math.max(1, Number(process.env.ONESHOT_LOOKBACK_BLOCKS_MAX ?? 300));
+}
+
+export function oneshotRetentionHours(): number {
+  return Math.max(1, Number(process.env.ONESHOT_RETENTION_HOURS ?? 2));
+}
+
+// Base rail: USDC atomic units (6 decimals). 500 = $0.0005 per lookup.
+export function oneshotPriceBaseAtomic(): bigint {
+  return BigInt(process.env.ONESHOT_PRICE_BASE_ATOMIC ?? "500");
+}
+
+// Hedera rail: tinybars (8 decimals). 10_000 = 0.001 ℏ per lookup.
+export function oneshotPriceHederaTinybars(): bigint {
+  return BigInt(process.env.ONESHOT_PRICE_HEDERA_TINYBAR ?? "10000");
+}

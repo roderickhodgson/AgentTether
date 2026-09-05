@@ -17,8 +17,9 @@ import type { Clock } from "@substreams/core/proto";
 import type { JsonObject } from "@bufbuild/protobuf";
 import { BlockEmitter } from "@substreams/node";
 import { createNodeTransport } from "@substreams/node/createNodeTransport";
-import { meterAndCommit } from "../db.js";
+import { meterAndCommit, type CaptureTransferInput } from "../db.js";
 import { executeSuccessSettlement } from "../payments/settlementEngine.js";
+import { oneshotContracts } from "../payments/pricing.js";
 import { logger } from "../logger.js";
 
 // Data-plane config (defaults mirrored in .env.example) — independent of the payment plane.
@@ -124,6 +125,40 @@ function heartbeat(clock: Clock) {
     { block: clock.number.toString(), chainTime: new Date(chainMs).toISOString(), behindWallClockMin: Number(behindMin.toFixed(1)) },
     `stream progress: block ${clock.number} · ${behindMin.toFixed(1)} min behind wall clock`,
   );
+}
+
+// Oneshot capture (3.4): every allowlisted transfer in the block, independent of intent
+// matches — the pull endpoint queries history, so capture must run even with zero
+// monitoring intents. Written per block inside the same transaction as metering.
+function captureTransfers(message: JsonObject | undefined, clock: Clock): CaptureTransferInput[] {
+  const allow = oneshotContracts();
+  if (allow.length === 0) return [];
+  const transfers = (message as { transfers?: TransferEvent[] } | undefined)?.transfers ?? [];
+  const chain = process.env.DATA_CHAIN ?? "ethereum-mainnet";
+  const ts = new Date(blockTimestamp(clock));
+  const out: CaptureTransferInput[] = [];
+  for (const t of transfers) {
+    const contract = normalizeHex(t.contract);
+    if (!allow.includes(contract.toLowerCase())) continue;
+    let amount: bigint;
+    try {
+      amount = BigInt(t.value);
+    } catch {
+      continue; // unparseable value — capture skips it, metering is unaffected
+    }
+    out.push({
+      chain,
+      blockNum: clock.number,
+      blockTimestamp: Number.isNaN(ts.getTime()) ? new Date(0) : ts,
+      txHash: normalizeHex(t.txId),
+      logIndex: Number(t.blockIndex ?? 0),
+      contract,
+      from: normalizeHex(t.from),
+      to: normalizeHex(t.to),
+      amount,
+    });
+  }
+  return out;
 }
 
 async function matchTransfers(message: JsonObject | undefined, clock: Clock): Promise<NormalizedEvent[]> {
@@ -233,6 +268,13 @@ async function runStream(
     state.lastCursor = undo.lastValidCursor;
     writeChain = writeChain
       .then(() => saveCursor(undo.lastValidCursor, 0n))
+      // Oneshot capture rows from the undone blocks would sit above the reverted cursor
+      // and pollute the lookback window — prune them (the replay re-captures).
+      .then(async () => {
+        const { getCursor, pruneCapturesAboveBlock } = await import("../db.js");
+        const row = await getCursor();
+        if (row) await pruneCapturesAboveBlock(row.blockNum);
+      })
       .catch((e) => logger.error({ err: e }, "undo cursor save failed"));
   });
   emitter.on("close", (error) => {
@@ -296,14 +338,15 @@ export async function startSubstreams(): Promise<never> {
         // Batch one UPDATE per intent per block — a downtime catch-up can carry ~150k
         // matches, and per-match writes would serialize into minutes of lag.
         for (const e of matches) byIntent.set(e.intentId, (byIntent.get(e.intentId) ?? 0) + 1);
-        if (byIntent.size === 0) {
+        const capture = captureTransfers(message, clock);
+        if (byIntent.size === 0 && capture.length === 0) {
           await saveCursor(cursor, clock.number);
           return;
         }
-        // Atomic per block: metering (+ bounded event capture) and the cursor commit or
-        // roll back together — a crash mid-block replays the block cleanly on restart
-        // instead of double-metering.
-        const metered = await meterAndCommit(byIntent, matches, cursor, Number(clock.number));
+        // Atomic per block: metering (+ bounded event capture + oneshot capture) and the
+        // cursor commit or roll back together — a crash mid-block replays the block
+        // cleanly on restart instead of double-metering.
+        const metered = await meterAndCommit(byIntent, matches, cursor, Number(clock.number), capture);
         for (const [intentId, count] of byIntent) {
           const total = metered.get(intentId) ?? 0;
           // Settlement engine fires strictly AFTER the commit (external side effects
