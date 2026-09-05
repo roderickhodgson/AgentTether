@@ -3,3 +3,5 @@ dist/
 .opencode/
 .env
 *.log
+SESSION-STATE.md
+*.swp
