@@ -18,7 +18,7 @@ import type { JsonObject } from "@bufbuild/protobuf";
 import { BlockEmitter } from "@substreams/node";
 import { createNodeTransport } from "@substreams/node/createNodeTransport";
 import { meterAndCommit } from "../db.js";
-import { onEventsMatched } from "../payments/settlementEngine.js";
+import { executeSuccessSettlement } from "../payments/settlementEngine.js";
 import { logger } from "../logger.js";
 
 // Data-plane config (defaults mirrored in .env.example) — independent of the payment plane.
@@ -263,8 +263,9 @@ export async function startSubstreams(): Promise<never> {
           const total = metered.get(intentId) ?? 0;
           // Settlement engine fires strictly AFTER the commit (external side effects
           // can't live inside the transaction), exactly once per intent: only when this
-          // block crossed the counter from zero (total - count === 0).
-          if (total - count === 0) await onEventsMatched(intentId);
+          // block crossed the counter from zero (total - count === 0). The engine's CAS
+          // claim makes a lost-then-swept trigger safe either way (4.3's startup sweep).
+          if (total - count === 0) await executeSuccessSettlement(intentId);
           logger.debug(
             { intent: intentId, metered: count, eventsMatched: total },
             "metered block matches",
