@@ -38,6 +38,9 @@ vi.mock("../payments/facilitator.js", () => ({
   },
   facilitator: { verify: vi.fn(), settle: vi.fn() },
   discoverUpto: vi.fn(async () => ({ facilitatorAddress: FACILITATOR_ADDRESS })),
+  txExplorerUrl: (txHash: string) => `https://sepolia.basescan.org/tx/${txHash}`,
+  voucherPermittedAmount: (payload: unknown) =>
+    (payload as { accepted?: { amount?: string } } | null)?.accepted?.amount ?? null,
 }));
 
 const mockedDb = vi.mocked(db);

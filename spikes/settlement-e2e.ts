@@ -20,7 +20,7 @@ import { toClientEvmSigner } from "@x402/evm";
 import { UptoEvmScheme } from "@x402/evm/upto/client";
 import { encodePaymentSignatureHeader, decodePaymentRequiredHeader } from "@x402/core/http";
 import type { PaymentPayload, PaymentRequired, PaymentRequirements } from "@x402/core/types";
-import { createPublicClient, http } from "viem";
+import { createPublicClient, formatUnits, http } from "viem";
 import { baseSepolia } from "viem/chains";
 import { prisma } from "../src/db.js";
 
@@ -84,6 +84,10 @@ async function createMonitoringIntent(ttlSeconds: number, label: string, minAmou
   if (res.status !== 402 || !header) throw new Error(`expected 402 + PAYMENT-REQUIRED, got ${res.status}: ${await res.text()}`);
   const paymentRequired = decodePaymentRequiredHeader(header) as PaymentRequired;
   const requirements = paymentRequired.accepts[0] as PaymentRequirements;
+  console.log(
+    `  402: up to ${formatUnits(BigInt(requirements.amount), 6)} USDC required (ceiling ${requirements.amount} atomic)` +
+      ` · ttl ${ttlSeconds}s · deadline hint ${requirements.maxTimeoutSeconds}s · payTo ${requirements.payTo}`,
+  );
   const result = await scheme.createPaymentPayload(2, requirements);
   const payload: PaymentPayload = {
     x402Version: 2,
@@ -127,7 +131,9 @@ assert(n1, "success beat delivered settlement.confirmed webhook");
 assert(n1.tx_hash, "success beat webhook carries the settlement tx");
 assert((n1.events ?? []).length > 0, "success beat webhook carries matched event data");
 assert((n1.amount_charged_atomic ?? "") !== "", "success beat webhook carries the charged amount");
-console.log(`beat 1 PASS — settled + data delivered: https://sepolia.basescan.org/tx/${n1.tx_hash}`);
+console.log(
+  `beat 1 PASS — settled ${formatUnits(BigInt(n1.amount_charged_atomic!), 6)} USDC — https://sepolia.basescan.org/tx/${n1.tx_hash}`,
+);
 
 // Beat 2 — timeout path with a LIVE deadline: a no-match intent (impossibly-high
 // threshold) expires at TTL with zero usage — the minute sweep settles $0 (no on-chain

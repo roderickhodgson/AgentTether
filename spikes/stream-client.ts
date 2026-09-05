@@ -10,7 +10,7 @@ import { toClientEvmSigner } from "@x402/evm";
 import { UptoEvmScheme } from "@x402/evm/upto/client";
 import { encodePaymentSignatureHeader, decodePaymentRequiredHeader } from "@x402/core/http";
 import type { PaymentPayload, PaymentRequired, PaymentRequirements } from "@x402/core/types";
-import { createPublicClient, createWalletClient, http, erc20Abi, maxUint256 } from "viem";
+import { createPublicClient, createWalletClient, erc20Abi, formatUnits, http, maxUint256 } from "viem";
 import { baseSepolia } from "viem/chains";
 
 const BASE_URL = process.env.SERVER_URL ?? "http://localhost:8080";
@@ -88,11 +88,15 @@ async function pay(signature: string): Promise<{ status: number; body: unknown }
 }
 
 const { paymentRequired } = await createIntent();
-console.log("402 received:", JSON.stringify({
-  scheme: paymentRequired.accepts[0].scheme,
-  amount: paymentRequired.accepts[0].amount,
-  resource: paymentRequired.resource.url.slice(0, 72) + "…",
-}));
+{
+  const req = paymentRequired.accepts[0];
+  const extra = (req.extra ?? {}) as { facilitatorAddress?: string };
+  console.log(
+    `402: up to ${formatUnits(BigInt(req.amount), 6)} USDC required (ceiling ${req.amount} atomic)` +
+      ` · network ${req.network} · payTo ${req.payTo} · deadline hint ${req.maxTimeoutSeconds}s` +
+      ` · facilitator ${extra.facilitatorAddress ?? "?"}`,
+  );
+}
 
 await ensurePermit2Allowance(BigInt(paymentRequired.accepts[0].amount));
 
@@ -108,6 +112,18 @@ const paymentSignature = encodePaymentSignatureHeader({
   payload: paymentResult.payload as Record<string, unknown>,
   extensions: paymentResult.extensions,
 } satisfies PaymentPayload);
+
+// What the signed voucher actually permits (the `upto` number) vs what the 402 asked for.
+{
+  const auth = (paymentResult.payload as { permit2Authorization?: { nonce?: string; deadline?: string } })
+    .permit2Authorization;
+  const req = paymentRequired.accepts[0];
+  console.log(
+    `voucher: permitted up to ${formatUnits(BigInt(req.amount), 6)} USDC (${req.amount} atomic)` +
+      ` · deadline ${auth?.deadline ? new Date(Number(auth.deadline) * 1000).toISOString() : "?"}` +
+      ` · nonce ${auth?.nonce?.slice(0, 16)}…`,
+  );
+}
 
 const first = await pay(paymentSignature);
 console.log("verify response:", first.status, JSON.stringify(first.body));

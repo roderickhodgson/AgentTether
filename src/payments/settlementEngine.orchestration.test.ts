@@ -28,6 +28,9 @@ vi.mock("./facilitator.js", () => ({
   NETWORK: "eip155:84532",
   PAY_TO_ADDRESS: RECEIVER,
   facilitator: { settle: vi.fn() },
+  txExplorerUrl: (txHash: string) => `https://sepolia.basescan.org/tx/${txHash}`,
+  voucherPermittedAmount: (payload: unknown) =>
+    (payload as { accepted?: { amount?: string } } | null)?.accepted?.amount ?? null,
 }));
 
 const mockedDb = vi.mocked(db);

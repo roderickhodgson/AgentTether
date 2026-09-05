@@ -18,7 +18,7 @@ import type { PaymentPayload, PaymentRequired, PaymentRequirements } from "@x402
 import type { Prisma } from "@prisma/client";
 import type { Request, Response } from "express";
 import { createIntent, getIntent, getIntentByPaymentNonce, storeVerifiedPayment } from "../db.js";
-import { discoverUpto, facilitator, NETWORK, USDC_ADDRESS, PAY_TO_ADDRESS } from "../payments/facilitator.js";
+import { discoverUpto, facilitator, NETWORK, USDC_ADDRESS, PAY_TO_ADDRESS, voucherPermittedAmount } from "../payments/facilitator.js";
 import { logger } from "../logger.js";
 
 // Permit2 deadlines must outlive the monitoring window: cron sweeps run every minute
@@ -160,7 +160,17 @@ async function createIntentHandler(req: Request, res: Response) {
     accepts: [requirements],
   };
   paymentRequiredResponse(res, paymentRequired);
-  logger.info({ intent: intent.id, maxLimit, ttl }, "intent created — 402 issued, awaiting signed voucher");
+  logger.info(
+    {
+      intent: intent.id,
+      // the 402 story: this is the ceiling the agent must be willing to sign
+      paymentRequiredAtomic: maxLimit,
+      payTo: PAY_TO_ADDRESS,
+      network: NETWORK,
+      ttl,
+    },
+    `intent created — 402 issued: up to ${maxLimit} atomic USDC required (ttl ${ttl}s), awaiting signed voucher`,
+  );
 }
 
 // Phase 2 of the flow (3.3): decode the voucher, correlate, verify, store — no settle.
@@ -251,9 +261,18 @@ async function verifySignedPayment(req: Request, res: Response, signature: strin
 
   // DEFERRED SETTLEMENT: no /settle here by design (3.1) — Phase 4's engine settles
   // from the stored voucher when the monitoring window ends.
+  const voucherPermitted = voucherPermittedAmount(payload);
   logger.info(
-    { intent: stored.id, payer, eventsMatched: stored.eventsMatched },
-    "voucher verified and stored — intent is MONITORING (settlement deferred)",
+    {
+      intent: stored.id,
+      payer,
+      // the voucher story: what the agent actually signed for vs what the 402 advertised
+      voucherPermitted,
+      advertisedCeiling: intent.maxLimitAtomic,
+      deadline: new Date(Number(permit2.deadline) * 1000).toISOString(),
+      eventsMatched: stored.eventsMatched,
+    },
+    `voucher verified — permitted up to ${voucherPermitted ?? "?"} atomic USDC (402 advertised ${intent.maxLimitAtomic}) — intent is MONITORING (settlement deferred)`,
   );
   res.status(202).json({
     job_id: stored.id,

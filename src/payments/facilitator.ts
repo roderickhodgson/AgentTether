@@ -19,6 +19,26 @@ export const facilitator = new HTTPFacilitatorClient({ url: FACILITATOR_URL });
 
 export type UptoDiscovery = { facilitatorAddress: string };
 
+// Explorer URI for a settlement tx, keyed by the CAIP-2 payment network. Covers the
+// Base family the demo settles on; unknown networks log the bare hash ("" prefix).
+const EXPLORER_TX_BASE: Record<string, string> = {
+  "eip155:84532": "https://sepolia.basescan.org/tx/",
+  "eip155:8453": "https://basescan.org/tx/",
+  "eip155:1": "https://etherscan.io/tx/",
+};
+
+export function txExplorerUrl(txHash: string): string {
+  return (EXPLORER_TX_BASE[NETWORK] ?? "") + txHash;
+}
+
+// The `upto` amount the client actually signed (the voucher's permitted ceiling) — the
+// server-side story is: 402 advertised `maxLimitAtomic` ≥ voucher `permitted.amount` ≥
+// settled `actual`. Logging all three makes the money legible end to end.
+export function voucherPermittedAmount(payload: unknown): string | null {
+  const accepted = (payload as { accepted?: { amount?: string } } | null)?.accepted;
+  return accepted?.amount ?? null;
+}
+
 let uptoCache: UptoDiscovery | null = null;
 
 export async function discoverUpto(): Promise<UptoDiscovery> {

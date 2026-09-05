@@ -44,10 +44,28 @@ import {
   markTimeout,
   type PersistedMatchedEvent,
 } from "../db.js";
-import { facilitator, NETWORK, PAY_TO_ADDRESS } from "./facilitator.js";
+import { facilitator, NETWORK, PAY_TO_ADDRESS, txExplorerUrl, voucherPermittedAmount } from "./facilitator.js";
 import { logger } from "../logger.js";
 
 const RPC_URL = process.env.RPC_URL ?? "https://sepolia.base.org";
+
+// USDC has 6 decimals; atomic-unit amounts read better in logs with the human form.
+export function formatUsdc(atomic: string): string {
+  const v = BigInt(atomic);
+  const whole = v / 1_000_000n;
+  const frac = (v % 1_000_000n).toString().padStart(6, "0").replace(/0+$/, "");
+  return frac ? `${whole}.${frac}` : `${whole}`;
+}
+
+// The money story shared by both settlement paths: what the 402 advertised (the intent's
+// ceiling), what the voucher actually permitted, and what we are about to settle.
+function moneyStory(intent: { maxLimitAtomic: string; paymentPayload: unknown; eventsMatched: number }) {
+  return {
+    advertisedCeiling: intent.maxLimitAtomic,
+    voucherPermitted: voucherPermittedAmount(intent.paymentPayload),
+    eventsMatched: intent.eventsMatched,
+  };
+}
 
 // ---- amount math -----------------------------------------------------------
 
@@ -259,7 +277,10 @@ export async function executeSuccessSettlement(intentId: string): Promise<void> 
   if (!intent || intent.status !== "MONITORING" || !(await claimForSettlement(intent.id))) return;
 
   const actual = actualAmountAtomic(intent.eventsMatched, intent.ratePerEventAtomic, intent.maxLimitAtomic);
-  logger.info({ intent: intentId, amount: actual, eventsMatched: intent.eventsMatched }, "settlement engine: success path");
+  logger.info(
+    { intent: intentId, settleAtomic: actual, settleUsdc: formatUsdc(actual), ...moneyStory(intent) },
+    `settlement engine: success path — settling ${formatUsdc(actual)} USDC for ${intent.eventsMatched} event(s)`,
+  );
   if (!intent.paymentPayload) {
     logger.error({ intent: intentId }, "MONITORING intent has no stored voucher — marking SETTLE_FAILED");
     await markSettleFailed(intent.id);
@@ -278,7 +299,18 @@ export async function executeSuccessSettlement(intentId: string): Promise<void> 
   }
 
   const stored = await markSettled(intent.id, outcome.txHash, outcome.amountAtomic);
-  logger.info({ intent: intentId, tx: outcome.txHash, amount: outcome.amountAtomic }, "settled — intent SETTLED, delivering data");
+  const txUrl = txExplorerUrl(outcome.txHash);
+  logger.info(
+    {
+      intent: intentId,
+      txHash: outcome.txHash,
+      txUrl,
+      settledAtomic: outcome.amountAtomic,
+      settledUsdc: formatUsdc(outcome.amountAtomic),
+      ...moneyStory(intent),
+    },
+    `settled ${formatUsdc(outcome.amountAtomic)} USDC — intent SETTLED — ${txUrl}`,
+  );
   if (!stored.webhookUrl) return;
   const { events, truncated } = eventsForWebhook(stored.matchedEvents, stored.eventsMatched);
   await deliverWebhook(stored.webhookUrl, {
@@ -300,7 +332,10 @@ export async function executeTimeoutSettlement(intentId: string): Promise<void> 
   if (!intent || intent.status !== "MONITORING" || !(await claimForSettlement(intent.id))) return;
 
   const actual = actualAmountAtomic(intent.eventsMatched, intent.ratePerEventAtomic, intent.maxLimitAtomic);
-  logger.info({ intent: intentId, amount: actual, eventsMatched: intent.eventsMatched }, "settlement engine: timeout path");
+  logger.info(
+    { intent: intentId, settleAtomic: actual, settleUsdc: formatUsdc(actual), ...moneyStory(intent) },
+    `settlement engine: timeout path — metered usage ${formatUsdc(actual)} USDC for ${intent.eventsMatched} event(s)`,
+  );
 
   // $0 timeout: nothing was metered, so nothing is settled — no on-chain tx, the
   // Permit2 authorization simply expires (spike "zero" mode). Notify without data.
@@ -339,7 +374,18 @@ export async function executeTimeoutSettlement(intentId: string): Promise<void> 
   }
 
   const stored = await markTimeout(intent.id, outcome.amountAtomic, outcome.txHash);
-  logger.info({ intent: intentId, tx: outcome.txHash, amount: outcome.amountAtomic }, "timeout settled metered usage — intent TIMEOUT");
+  const txUrl = txExplorerUrl(outcome.txHash);
+  logger.info(
+    {
+      intent: intentId,
+      txHash: outcome.txHash,
+      txUrl,
+      settledAtomic: outcome.amountAtomic,
+      settledUsdc: formatUsdc(outcome.amountAtomic),
+      ...moneyStory(intent),
+    },
+    `timeout settled ${formatUsdc(outcome.amountAtomic)} USDC — intent TIMEOUT — ${txUrl}`,
+  );
   if (!stored.webhookUrl) return;
   const { events, truncated } = eventsForWebhook(stored.matchedEvents, stored.eventsMatched);
   await deliverWebhook(stored.webhookUrl, {
