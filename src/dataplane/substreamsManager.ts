@@ -255,9 +255,10 @@ export async function startSubstreams(): Promise<never> {
           await saveCursor(cursor, clock.number);
           return;
         }
-        // Atomic per block: metering and cursor commit or roll back together — a crash
-        // mid-block replays the block cleanly on restart instead of double-metering.
-        const metered = await meterAndCommit(byIntent, cursor, Number(clock.number));
+        // Atomic per block: metering (+ bounded event capture) and the cursor commit or
+        // roll back together — a crash mid-block replays the block cleanly on restart
+        // instead of double-metering.
+        const metered = await meterAndCommit(byIntent, matches, cursor, Number(clock.number));
         for (const [intentId, count] of byIntent) {
           const total = metered.get(intentId) ?? 0;
           // Settlement engine fires strictly AFTER the commit (external side effects

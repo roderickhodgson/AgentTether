@@ -10,6 +10,7 @@ datasource db {
 enum IntentStatus {
   PENDING_PAYMENT
   MONITORING
+  SETTLING
   SETTLED
   TIMEOUT
   SETTLE_FAILED
@@ -28,6 +29,9 @@ model Intent {
   eventCondition     Json         @map("event_condition")
   status             IntentStatus @default(PENDING_PAYMENT)
   webhookUrl         String?      @map("webhook_url")
+  matchedEvents      Json?        @map("matched_events")
+  settlementTxHash   String?      @map("settlement_tx_hash")
+  settledAmountAtomic String?     @map("settled_amount_atomic")
   createdAt          DateTime     @default(now()) @map("created_at")
   updatedAt          DateTime     @updatedAt @map("updated_at")
 
