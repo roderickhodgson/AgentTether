@@ -76,6 +76,20 @@ d("db integration — settlement claim (CAS)", () => {
     });
     expect(await db.claimForSettlement(stillPending.id)).toBe(false);
   });
+
+  it("re-drive claim: only STALE SETTLING re-drives, and winning refreshes the claim window", async () => {
+    const intent = await seedIntent();
+    await db.claimForSettlement(intent.id); // → SETTLING, updatedAt = now
+
+    expect(await db.claimStaleSettlement(intent.id)).toBe(false); // fresh claim — a settle may be in flight
+
+    await db.prisma.intent.update({
+      where: { id: intent.id },
+      data: { updatedAt: new Date(Date.now() - 3 * 60_000) },
+    });
+    expect(await db.claimStaleSettlement(intent.id)).toBe(true); // stale → the sweep wins the retry
+    expect(await db.claimStaleSettlement(intent.id)).toBe(false); // winning refreshed updatedAt
+  });
 });
 
 d("db integration — meterAndCommit", () => {

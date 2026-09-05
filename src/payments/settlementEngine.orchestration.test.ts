@@ -19,6 +19,7 @@ vi.mock("../db.js", () => ({
   getIntent: vi.fn(),
   getSettlementCandidates: vi.fn(),
   claimForSettlement: vi.fn(),
+  claimStaleSettlement: vi.fn(),
   markSettled: vi.fn(),
   markSettleFailed: vi.fn(),
   markTimeout: vi.fn(),
@@ -92,6 +93,7 @@ beforeEach(() => {
   rpcReceipt = { status: "0x1" };
   webhookFailures = 0;
   mockedDb.claimForSettlement.mockResolvedValue(true);
+  mockedDb.claimStaleSettlement.mockResolvedValue(true);
   mockedDb.getIntent.mockImplementation(async (id: string) => intentFixture({ id }));
   mockedDb.markSettled.mockImplementation(async (id: string, tx: string, amount: string) =>
     intentFixture({ id, status: "SETTLED", settlementTxHash: tx, settledAmountAtomic: amount }));
@@ -171,6 +173,22 @@ describe("executeSuccessSettlement", () => {
     expect(mockedSettle).not.toHaveBeenCalled();
     expect(mockedDb.markSettled).not.toHaveBeenCalled();
     expect(webhookCalls).toHaveLength(0);
+  });
+
+  it("re-drives a stale SETTLING claim — the sweep retry after a transient rejection (found live)", async () => {
+    mockedDb.getIntent.mockResolvedValue(intentFixture({ status: "SETTLING" }));
+    await executeSuccessSettlement("i1");
+    expect(mockedDb.claimStaleSettlement).toHaveBeenCalledWith("i1");
+    expect(mockedSettle).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ amount: "70604" }));
+    expect(mockedDb.markSettled).toHaveBeenCalledWith("i1", TX, "70604");
+  });
+
+  it("a not-yet-stale SETTLING claim is left alone — the in-flight settle owns it", async () => {
+    mockedDb.getIntent.mockResolvedValue(intentFixture({ status: "SETTLING" }));
+    mockedDb.claimStaleSettlement.mockResolvedValue(false);
+    await executeSuccessSettlement("i1");
+    expect(mockedSettle).not.toHaveBeenCalled();
+    expect(mockedDb.markSettled).not.toHaveBeenCalled();
   });
 
   it("rejects by deadline class → TIMEOUT uncollected, notice without data", async () => {

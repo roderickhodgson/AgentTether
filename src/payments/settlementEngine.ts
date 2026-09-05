@@ -39,6 +39,7 @@ import {
   getIntent,
   getSettlementCandidates,
   claimForSettlement,
+  claimStaleSettlement,
   markSettled,
   markSettleFailed,
   markTimeout,
@@ -272,9 +273,23 @@ async function handleSettleRejection(
 
 const uncertainLogged = new Set<string>();
 
+// Who may drive settlement right now:
+//  - MONITORING → fresh claim (the event-fired trigger, or the sweep's lost-trigger
+//    recovery): CAS MONITORING→SETTLING, exactly one winner.
+//  - SETTLING → re-drive (the sweep retrying a claim whose settle died — crash or
+//    transient facilitator rejection): CAS on staleness, so the retry is spaced by
+//    STALE_SETTLING_MS and one sweep pass owns it. Without this branch the recovery
+//    set (4.3) was dead code — the guard rejected every SETTLING intent it selected.
+//  - anything else → nothing owed.
+async function acquireToSettle(intent: { id: string; status: string }): Promise<boolean> {
+  if (intent.status === "MONITORING") return claimForSettlement(intent.id);
+  if (intent.status === "SETTLING") return claimStaleSettlement(intent.id);
+  return false;
+}
+
 export async function executeSuccessSettlement(intentId: string): Promise<void> {
   const intent = await getIntent(intentId);
-  if (!intent || intent.status !== "MONITORING" || !(await claimForSettlement(intent.id))) return;
+  if (!intent || !(await acquireToSettle(intent))) return;
 
   const actual = actualAmountAtomic(intent.eventsMatched, intent.ratePerEventAtomic, intent.maxLimitAtomic);
   logger.info(
@@ -329,7 +344,7 @@ export async function executeSuccessSettlement(intentId: string): Promise<void> 
 
 export async function executeTimeoutSettlement(intentId: string): Promise<void> {
   const intent = await getIntent(intentId);
-  if (!intent || intent.status !== "MONITORING" || !(await claimForSettlement(intent.id))) return;
+  if (!intent || !(await acquireToSettle(intent))) return;
 
   const actual = actualAmountAtomic(intent.eventsMatched, intent.ratePerEventAtomic, intent.maxLimitAtomic);
   logger.info(

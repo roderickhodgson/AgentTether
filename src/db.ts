@@ -134,6 +134,24 @@ export async function claimForSettlement(id: string): Promise<boolean> {
   return res.count === 1;
 }
 
+// How long a SETTLING claim sits before the sweep may re-drive it: long enough for an
+// in-flight settle (receipt polling can take ~60s), short enough to retry inside the
+// voucher's ttl+120s deadline window.
+export const STALE_SETTLING_MS = 2 * 60 * 1000;
+
+// Re-drive claim (4.3): a stale SETTLING intent is owed a retry — the settle call died
+// between the claim and the settle (crash, facilitator bounce). This CAS both verifies
+// staleness and refreshes updatedAt, so exactly one sweep pass owns the retry and the
+// next pass can't re-drive it until it goes stale again. The nonce backstop makes even
+// a wrongly-won re-drive safe.
+export async function claimStaleSettlement(id: string, staleMs: number = STALE_SETTLING_MS): Promise<boolean> {
+  const res = await prisma.intent.updateMany({
+    where: { id, status: "SETTLING", updatedAt: { lt: new Date(Date.now() - staleMs) } },
+    data: { updatedAt: new Date() },
+  });
+  return res.count === 1;
+}
+
 export async function markSettled(id: string, settlementTxHash: string, settledAmountAtomic: string) {
   return prisma.intent.update({
     where: { id },
@@ -164,7 +182,7 @@ export async function markTimeout(id: string, settledAmountAtomic?: string, sett
 //    consumed until settle succeeds, so a re-drive is safe; if settle DID succeed but the
 //    response was lost, the re-drive's nonce-consumed rejection is logged for the runbook,
 //    never auto-flipped to SETTLE_FAILED — money may have moved).
-export async function getSettlementCandidates(now = new Date(), staleSettlingMs = 2 * 60 * 1000) {
+export async function getSettlementCandidates(now = new Date(), staleSettlingMs: number = STALE_SETTLING_MS) {
   return prisma.intent.findMany({
     where: {
       OR: [
