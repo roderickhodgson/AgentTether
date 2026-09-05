@@ -1,6 +1,8 @@
 # 🪝 AgentTether
 **ETHOnline 2026 Hackathon** | **Category:** Artificial Intelligence | **Tracks:** The Graph (Best AI Tooling), Hedera (AI & Agentic Payments)
 
+[![ci](https://github.com/roderickhodgson/AgentTether/actions/workflows/ci.yml/badge.svg)](https://github.com/roderickhodgson/AgentTether/actions/workflows/ci.yml)
+
 ## 📖 Overview
 AgentTether lets autonomous AI agents provision and pay for conditional, asynchronous webhooks for future blockchain events — metered, escrow-free, and settled only for what actually fires. It is application-layer middleware bridging the **x402 HTTP payment standard** with **The Graph's Substreams**: instead of locking capital in smart contracts, agents sign metered, partial-fill cryptographic vouchers (Permit2 via the x402 `upto` scheme) that the Express backend holds until the condition is met or a Time-to-Live (TTL) expires — then settles only for the resources actually consumed.
 
