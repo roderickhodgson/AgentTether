@@ -1,0 +1,9 @@
+# Pinned — do not bump casually (mirrors the Node side's @x402/* pin at 2.25.0;
+# the Python SDK's latest is 2.22.0 — version skew is spike-gated, see README 5.2).
+x402[httpx,evm]==2.22.0
+web3==7.12.0
+flask==3.1.1
+requests==2.32.4
+python-dotenv==1.0.1
+
+pytest==8.4.1

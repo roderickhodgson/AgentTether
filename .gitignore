@@ -5,3 +5,12 @@ dist/
 *.log
 SESSION-STATE.md
 *.swp
+
+# Python agent (Phase 5)
+agent/.venv/
+agent/state.json
+__pycache__/
+*.pyc
+.pytest_cache/
+
+*.egg-info/
