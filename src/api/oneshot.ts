@@ -78,7 +78,15 @@ export async function mountOneshot(app: Express): Promise<void> {
       maxTimeoutSeconds: 60,
     },
   ];
-  const facilitators = [new HTTPFacilitatorClient({ url: FACILITATOR_URL })];
+  // One facilitator client per rail; the resource server picks the first client whose
+  // /supported advertises the payment's network (discovered at startup — never hardcode
+  // capabilities). Order encodes the bounty's routing: Blocky402 first makes it the
+  // hedera:testnet primary; it doesn't advertise eip155:84532, so Base falls through to
+  // the default facilitator — and the default remains the degraded-mode hedera fallback
+  // (risk #4) whenever Blocky402 is skipped/unavailable.
+  const facilitators = hederaPayTo
+    ? [new HTTPFacilitatorClient({ url: HEDERA_FACILITATOR_URL }), new HTTPFacilitatorClient({ url: FACILITATOR_URL })]
+    : [new HTTPFacilitatorClient({ url: FACILITATOR_URL })];
   const schemes: SchemeRegistration[] = [{ network: NETWORK, server: new ExactEvmScheme() }];
   if (hederaPayTo) {
     rails.push({
@@ -91,7 +99,6 @@ export async function mountOneshot(app: Express): Promise<void> {
       network: "hedera:testnet",
       maxTimeoutSeconds: 60,
     });
-    facilitators.push(new HTTPFacilitatorClient({ url: HEDERA_FACILITATOR_URL }));
     schemes.push({ network: "hedera:testnet", server: new ExactHederaScheme() });
   }
   logger.info(

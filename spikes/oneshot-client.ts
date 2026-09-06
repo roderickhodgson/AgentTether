@@ -48,7 +48,9 @@ const hederaPk = PrivateKey.fromBytesECDSA(Buffer.from(pk.replace(/^0x/, ""), "h
 const fetchWithPayHedera = HEDERA_PAYER
   ? wrapFetchWithPayment(
       globalThis.fetch,
-      new x402Client().register(
+      // spendControls off: HBAR ("0.0.0") isn't in the client's default-asset table, and
+      // this demo client only ever pays our own endpoint's quoted 10k-tinybar fee.
+      x402Client.fromConfig({ schemes: [], spendControls: false }).register(
         HEDERA_NETWORK,
         new ExactHederaScheme(createClientHederaSigner(HEDERA_PAYER, hederaPk, { network: HEDERA_NETWORK })),
       ),
