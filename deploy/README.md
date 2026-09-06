@@ -8,6 +8,7 @@ run the daemon and manual instances side by side: only the lease holder streams.
 ## macOS — launchd
 
 ```bash
+mkdir -p ~/Library/Logs/AgentTether   # launchd won't create the log dir itself
 cp deploy/com.agenttether.backend.plist ~/Library/LaunchAgents/
 launchctl load -w ~/Library/LaunchAgents/com.agenttether.backend.plist
 
