@@ -49,6 +49,18 @@ model SubstreamsCursor {
   @@map("substreams_cursor")
 }
 
+// Single-writer lease (ops rule enforced in code): exactly one backend instance may
+// stream against this DB. Claimed with a heartbeat; a lease whose heartbeat is older
+// than the TTL is stale and may be taken over (crash recovery). Holder identity is
+// `hostname:pid:started-at` for unambiguous logs.
+model ProcessLease {
+  id         String   @id @default("singleton")
+  holder     String
+  heartbeatAt DateTime @updatedAt @map("heartbeat_at")
+
+  @@map("process_lease")
+}
+
 // Rolling capture of transfers for the oneshot lookback endpoint — filtered to the
 // allowlisted contracts at capture time (ONESHOT_CONTRACTS), pruned past the retention
 // window by the sweep. Written in the same per-block transaction as metering + the

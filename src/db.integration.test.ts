@@ -60,7 +60,42 @@ beforeAll(async () => {
 afterAll(async () => {
   await db.prisma.intent.deleteMany({ where: { agentWallet: AGENT } });
   await db.prisma.processedTransfer.deleteMany({ where: { contract: { in: [TEST_CONTRACT, "0xother"] } } });
+  await db.prisma.$executeRaw`DELETE FROM process_lease WHERE holder LIKE 'test-suite:%'`;
   await db.prisma.$disconnect();
+});
+
+d("db integration — single-writer lease", () => {
+  const A = "test-suite:a:2026-01-01T00:00:00Z";
+  const B = "test-suite:b:2026-01-01T00:00:01Z";
+
+  it("a fresh lease blocks another holder; the same holder re-claims idempotently", async () => {
+    expect(await db.claimProcessLease(A)).toBe(true);
+    expect(await db.claimProcessLease(B)).toBe(false); // fresh, foreign → blocked
+    expect(await db.claimProcessLease(A)).toBe(true); // same holder → refresh
+    expect((await db.getProcessLease())?.holder).toBe(A);
+  });
+
+  it("a stale lease is takeable; a renewed one is not", async () => {
+    // A stops heartbeating → backdate its heartbeat past the TTL → B takes over
+    await db.prisma.$executeRaw`UPDATE process_lease SET "heartbeat_at" = now() - interval '40 seconds' WHERE holder = ${A}`;
+    expect(await db.claimProcessLease(B)).toBe(true);
+    expect(await db.claimProcessLease(A)).toBe(false); // B now holds it fresh
+
+    // B heartbeats → the lease stays B's
+    expect(await db.renewProcessLease(B)).toBe(true);
+    expect(await db.renewProcessLease(A)).toBe(false); // wrong holder can't renew
+    expect((await db.getProcessLease())?.holder).toBe(B);
+  });
+
+  it("release deletes only our own row; a foreign release is a no-op", async () => {
+    await db.releaseProcessLease(A); // A doesn't hold it — nothing happens
+    expect((await db.getProcessLease())?.holder).toBe(B);
+    await db.releaseProcessLease(B); // graceful shutdown path
+    expect(await db.getProcessLease()).toBeNull();
+    // released → claimable immediately (supervisor restart takes over with no TTL wait)
+    expect(await db.claimProcessLease(A)).toBe(true);
+    await db.releaseProcessLease(A);
+  });
 });
 
 d("db integration — settlement claim (CAS)", () => {

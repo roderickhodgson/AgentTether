@@ -302,8 +302,24 @@ async function runStream(
   };
 }
 
-export async function startSubstreams(): Promise<never> {
+// Graceful-stop coordination: shutdown handlers call stopSubstreams(), which stops the
+// active stream handle and breaks the manager's retry loop. In-flight per-block writes
+// finish on their own chains (cursor-committed blocks are safe; the rest replay).
+let stopping = false;
+let currentStream: { stop(): void } | null = null;
+
+export function stopSubstreams(): void {
+  stopping = true;
+  currentStream?.stop();
+}
+
+export async function startSubstreams(): Promise<void> {
   if (!API_KEY) throw new Error("SUBSTREAMS_API_KEY is required");
+  // Single-writer lease: claim BEFORE the retry loop. A fresh lease held by another
+  // instance throws LeaseHeldError — the entrypoint hard-exits so a supervisor keeps
+  // retrying until the dead holder's lease goes stale and this instance takes over.
+  const { acquireLease } = await import("../lease.js");
+  await acquireLease();
   const state: StreamState = { lastCursor: (await getSavedCursor()) ?? undefined };
   logger.info(
     {
@@ -319,6 +335,7 @@ export async function startSubstreams(): Promise<never> {
   let emptyAttempts = 0;
   let failuresOnCursor = 0;
   for (;;) {
+    if (stopping) return;
     const resuming = Boolean(state.lastCursor);
     try {
       let blocksSeen = 0;
@@ -364,7 +381,9 @@ export async function startSubstreams(): Promise<never> {
           );
         }
       });
+      currentStream = handle;
       const result = await handle.done;
+      currentStream = null;
       blocksSeen = result.blocksSeen;
       backoffMs = 1000;
       failuresOnCursor = 0;
@@ -374,6 +393,8 @@ export async function startSubstreams(): Promise<never> {
       }
       logger.info({ blocksSeen }, `stream ended after ${blocksSeen} blocks — retrying in ${backoffMs}ms`);
     } catch (e) {
+      currentStream = null;
+      if (stopping) return;
       emptyAttempts += 1;
       if (resuming) {
         failuresOnCursor += 1;

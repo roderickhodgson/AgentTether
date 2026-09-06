@@ -189,6 +189,52 @@ export async function pruneCapturesAboveBlock(blockNum: number) {
   return res.count;
 }
 
+// ── Single-writer lease ─────────────────────────────────────────────────────
+// Enforces the ops rule "exactly one backend instance may stream against this DB" in
+// code: a heartbeat lease on a singleton row. A fresh lease held by another holder
+// cannot be claimed; a stale one (heartbeat older than the TTL — the holder crashed)
+// can. The CAS lives in the SQL so concurrent claims are decided atomically.
+
+// 3 missed heartbeats (10s cadence) = stale. After an unclean crash, a supervisor
+// restart within the TTL exits; the next one takes over.
+export const LEASE_TTL_MS = 30_000;
+
+// Attempt to claim/re-claim the lease for `holder`. True iff this holder now owns it:
+// - no row → insert (claimed)
+// - row held by this holder → refresh (idempotent re-claim)
+// - row held by another holder with a STALE heartbeat → take over
+// - row held by another holder with a FRESH heartbeat → false (someone else streams)
+export async function claimProcessLease(holder: string, ttlMs: number = LEASE_TTL_MS): Promise<boolean> {
+  const cutoff = new Date(Date.now() - ttlMs);
+  const res = await prisma.$executeRaw`
+    INSERT INTO process_lease (id, holder, "heartbeat_at")
+    VALUES ('singleton', ${holder}, now())
+    ON CONFLICT (id) DO UPDATE
+      SET holder = ${holder}, "heartbeat_at" = now()
+      WHERE process_lease.holder = ${holder} OR process_lease."heartbeat_at" < ${cutoff}
+  `;
+  return res === 1;
+}
+
+// Heartbeat: keep the lease only if this holder still owns it. 0 = lease lost.
+export async function renewProcessLease(holder: string): Promise<boolean> {
+  const res = await prisma.$executeRaw`
+    UPDATE process_lease SET "heartbeat_at" = now()
+    WHERE id = 'singleton' AND holder = ${holder}
+  `;
+  return res === 1;
+}
+
+// Graceful release — only ever deletes OUR row (a wrong-holder delete is a no-op).
+export async function releaseProcessLease(holder: string): Promise<void> {
+  await prisma.$executeRaw`DELETE FROM process_lease WHERE id = 'singleton' AND holder = ${holder}`;
+}
+
+export async function getProcessLease(): Promise<{ holder: string; heartbeatAt: Date } | null> {
+  const row = await prisma.processLease.findUnique({ where: { id: "singleton" } });
+  return row ? { holder: row.holder, heartbeatAt: row.heartbeatAt } : null;
+}
+
 export async function getMonitoringIntents() {
   return prisma.intent.findMany({ where: { status: "MONITORING" } });
 }
