@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.agenttether.backend</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/roderick/Code/AgentTether/deploy/start.sh</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/roderick/Code/AgentTether</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- start.sh resolves node itself; PATH here is a convenience fallback -->
+    <key>PATH</key>
+    <string>/Users/roderick/.nvm/versions/node/v25.9.0/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>HOME</key>
+    <string>/Users/roderick</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Always-on: restart on any exit. After an unclean crash the single-writer lease
+       goes stale within 30s, so restarts during that window exit(1) and relaunch until
+       the stale lease is takeable (ThrottleInterval paces those retries). -->
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <key>StandardOutPath</key>
+  <string>/Users/roderick/Library/Logs/AgentTether/backend.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/roderick/Library/Logs/AgentTether/backend.err.log</string>
+</dict>
+</plist>

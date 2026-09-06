@@ -1,0 +1,26 @@
+# AgentTether backend — systemd USER unit (Linux).
+# Install:
+#   mkdir -p ~/.config/systemd/user
+#   cp deploy/agenttether.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now agenttether
+#   journalctl --user -u agenttether -f
+# (For a system-wide unit instead: move it to /etc/systemd/system/, set User=,
+#  WorkingDirectory= to absolute paths, and drop %h.)
+[Unit]
+Description=AgentTether backend (x402 <-> Substreams)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=%h/Code/AgentTether
+ExecStart=/bin/bash %h/Code/AgentTether/deploy/start.sh
+Restart=on-failure
+# Restart within the single-writer lease TTL (30s) exits immediately (lease still
+# fresh); after that the restart takes over the stale lease. 10s paces those retries.
+RestartSec=10
+Environment=HOME=%h
+# .env is loaded by dotenv from the working directory — no secrets in the unit.
+
+[Install]
+WantedBy=default.target
