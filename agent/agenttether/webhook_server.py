@@ -24,6 +24,7 @@ class WebhookServer:
         self.config = config
         self._lock = threading.Lock()
         self._notices: dict[str, list[dict[str, Any]]] = {}
+        self._callbacks: list[Callable[[dict[str, Any]], None]] = []
         self.app = Flask("agenttether-webhook")
         self.app.logger.disabled = True
         self._register_routes()
@@ -37,6 +38,12 @@ class WebhookServer:
             if intent_id:
                 with self._lock:
                     self._notices.setdefault(intent_id, []).append(notice)
+            # post-buffer callbacks (the graph resume) run outside the lock
+            for cb in self._callbacks:
+                try:
+                    cb(notice)
+                except Exception:  # noqa: BLE001 — the receiver must always 200
+                    pass
             return jsonify(ok=True)
 
         @self.app.post("/resume/<intent_id>")
@@ -51,6 +58,10 @@ class WebhookServer:
             return jsonify(notices=drained)
 
     # ── accessors ───────────────────────────────────────────────────────────
+    def on_notice(self, callback: Callable[[dict[str, Any]], None]) -> None:
+        """Register a post-buffer callback (e.g. the graph resume hook)."""
+        self._callbacks.append(callback)
+
     def notices(self, intent_id: str, wait: bool = False, timeout: float = 0.0) -> list[dict[str, Any]]:
         """Buffered notices for an intent; optionally block until one arrives."""
         import time

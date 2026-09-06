@@ -80,6 +80,7 @@ def test_webhook_server_buffers_by_intent_and_resume_drains():
     cfg_webhook = WebhookServer.__new__(WebhookServer)  # skip __init__'s config use
     cfg_webhook._lock = __import__("threading").Lock()
     cfg_webhook._notices = {}
+    cfg_webhook._callbacks = []
     cfg_webhook.app = __import__("flask").Flask("test")
     cfg_webhook._register_routes()
     client = cfg_webhook.app.test_client()
@@ -100,5 +101,6 @@ def test_webhook_notices_accessor():
     server = WebhookServer.__new__(WebhookServer)
     server._lock = __import__("threading").Lock()
     server._notices = {"j-2": [{"intent_id": "j-2"}]}
+    server._callbacks = []
     assert server.notices("j-2") == [{"intent_id": "j-2"}]
     assert server.notices("j-2", wait=False) == []

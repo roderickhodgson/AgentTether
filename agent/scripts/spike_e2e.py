@@ -24,7 +24,7 @@ MIN_1000_USDC = "1000000000"
 MIN_1B_USDC = "1000000000000000000"
 
 cfg = load_config()
-session = x402_session(cfg)
+session, quote = x402_session(cfg)
 print(f"agent payer: {cfg.wallet}")
 
 server = WebhookServer(cfg)
