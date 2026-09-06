@@ -16,7 +16,7 @@
     "reset": "tsx src/scripts/reset.ts",
     "wallet-check": "tsx src/scripts/wallet-check.ts",
     "test:integration": "vitest run --config vitest.integration.config.ts",
-    "verify:live": "tsx spikes/stream-client.ts && tsx spikes/settlement-e2e.ts"
+    "verify:live": "tsx spikes/stream-client.ts && tsx spikes/settlement-e2e.ts && tsx spikes/oneshot-client.ts"
   },
   "repository": {
     "type": "git",

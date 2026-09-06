@@ -29,7 +29,7 @@ Guidance for AI coding agents (and humans) working on this repo. The README is t
 | `npm run wallet-check` | Read-only report: ETH/USDC balances + Permit2 allowance for `AGENT_WALLET` and `PAY_TO_ADDRESS` (plain JSON-RPC, no tx, no web3 dep) |
 | `npm test` | Fast vitest suite: pure units + mocked HTTP/orchestration — no DB, no chain, no money (matcher window semantics, engine triage, router branch table) |
 | `npm run test:integration` | DB-backed tests against the Neon **branch** (`TEST_DATABASE_URL` in `.env`) — isolated copy, safe to run during a live demo |
-| `npm run verify:live` | Pre-demo live verification: stream-client e2e + settlement e2e (needs `npm start` running; moves testnet USDC) |
+| `npm run verify:live` | Pre-demo live verification: stream-client e2e + settlement e2e + oneshot e2e (both rails) (needs `npm start` running; moves testnet USDC + HBAR) |
 | `npm run dev` / `start` | Express backend (`/healthz`) |
 
 ## Architecture facts (rediscovering these is expensive)
