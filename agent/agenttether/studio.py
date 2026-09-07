@@ -7,6 +7,10 @@ can visualize the same graph definition, including the wait_for_webhook pause.
 """
 from __future__ import annotations
 
-from .demo_graph import DemoStack
+try:
+    from .demo_graph import DemoStack
+except ImportError:  # `langgraph dev` loads this file as a top-level module
+    from agenttether.demo_graph import DemoStack
 
-graph = DemoStack().graph  # noqa: E305 — module-level graph for langgraph.json
+# checkpointer=None: the dev server injects its own persistence and rejects custom ones.
+graph = DemoStack(checkpointer=None).graph  # noqa: E305 — module-level graph for langgraph.json

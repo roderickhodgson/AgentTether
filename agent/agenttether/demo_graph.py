@@ -17,14 +17,21 @@ from .llm import create_llm
 from .stream_client import StreamClient
 from .x402_session import x402_session
 
+_AUTO = object()  # sentinel: runner default (in-process MemorySaver)
+
 
 class DemoStack:
-    """Everything the agent needs, built once: config, paid session, graph."""
+    """Everything the agent needs, built once: config, paid session, graph.
+
+    `checkpointer`: pass an explicit one (default: MemorySaver for the single-process
+    demo), or None to compile WITHOUT one — that's the LangGraph dev/Studio context,
+    where the platform injects its own persistence and rejects custom checkpointers.
+    """
 
     def __init__(
         self,
         config: Config | None = None,
-        checkpointer: Any | None = None,
+        checkpointer: Any | None = _AUTO,
         webhook_url: str = "http://127.0.0.1:9098/hook",
         default_watch: dict[str, Any] | None = None,
     ) -> None:
@@ -32,7 +39,9 @@ class DemoStack:
         self.session, self.quote = x402_session(self.config)
         self.stream = StreamClient(self.session, self.config.server_url)
         self.llm = create_llm(self.config)
-        self.checkpointer = checkpointer or MemorySaver()
+        if checkpointer is _AUTO:
+            checkpointer = MemorySaver()
+        self.checkpointer = checkpointer
         self.graph = build_graph(
             self.stream,
             self.llm,

@@ -39,14 +39,27 @@ compute) → `observe` (LLM narrates + the cross-chain disclosure) → `decide` 
 re-issue another window or stop). The backend's webhook resumes the graph from the
 receiver thread; both `settlement.confirmed` and `intent.timeout` wake it.
 
-### LangGraph Studio
+### LangGraph Studio (verified)
 
 ```bash
-cd agent && .venv/bin/langgraph dev   # attaches to agent/langgraph.json → studio.py:graph
+cd agent && .venv/bin/langgraph dev        # local API on :2024 (needs langgraph-cli[inmem])
+open "https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024"
 ```
 
 Studio visualizes the graph parking on `wait_for_webhook` — the judges see the agent
-waiting patiently. Studio is a viewer for this demo; the runner owns the process.
+waiting patiently. **Verified through the platform API:** a run created a real intent,
+the thread state showed `task: wait_for_webhook · interrupts: ['monitoring']` (narration
+unset — observe never ran), and a `Command(resume)` completed with the disclosure
+narration. Notes: `studio.py` compiles WITHOUT a checkpointer (the dev server injects
+its own persistence and rejects custom ones); the demo runner keeps its MemorySaver.
+
+### The shareable results page
+
+The demo prints `report page: <url>/w/<intent-id>` — a human-readable rendering of the
+watch (events table with mainnet explorer links, settlement receipt with the Base
+Sepolia link, the cross-chain disclosure). Served by the backend at `/w/:id`; the same
+page deploys to Netlify (`npx netlify deploy --prod --dir web` from the repo root) and
+fetches any reachable API via `?api=<base>`.
 
 ### The LLM layer
 
