@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AgentTether — watch report</title>
+<style>
+  :root { color-scheme: dark; }
+  body { background: #0b0e14; color: #dbe2ee; font: 15px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0; padding: 32px 16px 64px; }
+  main { max-width: 860px; margin: 0 auto; }
+  h1 { font-size: 18px; letter-spacing: .5px; color: #8ab4ff; margin: 0 0 4px; }
+  .sub { color: #7a8699; font-size: 13px; margin-bottom: 24px; }
+  .card { border: 1px solid #1e2635; border-radius: 10px; padding: 16px 18px; margin-bottom: 16px; background: #10141d; }
+  .row { display: flex; gap: 10px; padding: 3px 0; flex-wrap: wrap; }
+  .k { color: #7a8699; min-width: 170px; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px; border: 1px solid #2a3752; }
+  .SETTLED { color: #6fe3a5; border-color: #1f5c40; }
+  .TIMEOUT { color: #ffd479; border-color: #5c4a1f; }
+  .MONITORING, .SETTLING { color: #8ab4ff; border-color: #2a3752; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; color: #7a8699; font-weight: normal; padding: 6px 8px; border-bottom: 1px solid #1e2635; }
+  td { padding: 6px 8px; border-bottom: 1px solid #141a26; word-break: break-all; }
+  td.num { text-align: right; white-space: nowrap; }
+  a { color: #8ab4ff; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .ok { color: #6fe3a5; } .zero { color: #ffd479; }
+  .foot { color: #7a8699; font-size: 12px; margin-top: 28px; border-top: 1px solid #1e2635; padding-top: 14px; }
+  .err { color: #ff8f8f; }
+</style>
+</head>
+<body>
+<main>
+  <h1>AgentTether — watch report</h1>
+  <div class="sub" id="sub">loading…</div>
+  <div id="content"></div>
+  <div class="foot" id="disclosure"></div>
+</main>
+<script>
+const params = new URLSearchParams(location.search);
+const id = params.get("i") || location.pathname.split("/").filter(Boolean).pop();
+const api = params.get("api") || location.origin; // same origin when served by the backend at /w/:id
+
+const fmt = (atomic) => {
+  const n = Number(atomic);
+  return Number.isFinite(n) ? `${n.toLocaleString()} atomic${n >= 1e6 ? ` (≈ ${(n / 1e6).toLocaleString()} USDC)` : ""}` : atomic;
+};
+const short = (h) => h ? `${h.slice(0, 10)}…${h.slice(-6)}` : "—";
+const row = (k, v) => `<div class="row"><span class="k">${k}</span><span>${v}</span></div>`;
+
+(async () => {
+  try {
+    const res = await fetch(`${api}/api/v1/intents/${id}/report`);
+    if (!res.ok) throw new Error(`API ${res.status}`);
+    const r = await res.json();
+    const i = r.intent, m = r.matched, s = r.settlement;
+
+    document.getElementById("sub").textContent = `intent ${i.id}`;
+    const head = `
+      <div class="card">
+        <div class="row"><span class="k">status</span><span class="badge ${i.status}">${i.status}</span></div>
+        ${row("asset watched", i.asset)}
+        ${row("fires on transfers ≥", fmt(i.min_amount_atomic))}
+        ${row("window", `${new Date(i.created_at).toLocaleString()} → ${new Date(i.expires_at).toLocaleString()}`)}
+        ${row("budget", `${i.budget_blocks} blocks × ${i.per_block_rate_atomic} atomic — ceiling ${fmt(i.max_limit_atomic)}`)}
+      </div>`;
+    const settle = `
+      <div class="card">
+        <div class="row"><span class="k">settlement</span><span class="${s.tx_hash ? "ok" : "zero"}">${
+          s.tx_hash
+            ? `${s.amount_charged_atomic} atomic charged → <a href="${s.explorer_url}" target="_blank">${short(s.tx_hash)}</a>`
+            : s.note.replace("The window expired with no blocks processed — ", "")
+        }</span></div>
+        <div class="row"><span class="k"></span><span class="zero">${s.tx_hash ? "" : s.note}</span></div>
+      </div>`;
+    const events = m.events.length ? `
+      <div class="card">
+        <div class="row"><span class="k">delivered events</span><span>${m.count} matched${m.truncated ? ` (showing first ${m.stored})` : ""}</span></div>
+        <table><tr><th>block</th><th>amount</th><th>from → to</th><th>tx</th></tr>
+        ${m.events.slice(0, 50).map(e => `<tr>
+          <td>${e.block}</td>
+          <td class="num">${fmt(e.amount_atomic)}</td>
+          <td><a href="https://etherscan.io/tx/${e.tx_hash}" target="_blank">${short(e.from)} → ${short(e.to)}</a></td>
+          <td><a href="https://etherscan.io/tx/${e.tx_hash}" target="_blank">${short(e.tx_hash)}</a></td>
+        </tr>`).join("")}</table>
+      </div>` : "";
+    document.getElementById("content").innerHTML = head + settle + events;
+    document.getElementById("disclosure").textContent = r.disclosure;
+  } catch (e) {
+    document.getElementById("sub").innerHTML = `<span class="err">failed to load: ${e.message}</span>` +
+      ` — this page fetches <code>${api}/api/v1/intents/${id}/report</code>; the backend must be reachable from your browser (localhost works when served by the backend; a hosted page needs an https tunnel).`;
+  }
+})();
+</script>
+</body>
+</html>

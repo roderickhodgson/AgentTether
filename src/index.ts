@@ -4,6 +4,7 @@ import { prisma } from "./db.js";
 import { logger } from "./logger.js";
 import { intentsRouter } from "./api/intentsRouter.js";
 import { mountOneshot } from "./api/oneshot.js";
+import { mountReport } from "./api/report.js";
 import { startSubstreams, stopSubstreams } from "./dataplane/substreamsManager.js";
 import { isLeaseHeldError, releaseLease } from "./lease.js";
 import { startSettlementSweeps } from "./cron.js";
@@ -15,6 +16,8 @@ app.use(express.json());
 // sits AFTER the middleware so it only runs on verified payment.
 app.use(intentsRouter);
 await mountOneshot(app);
+// Shareable results pages (/w/:id) — humans open what the agent bought.
+mountReport(app);
 
 app.get("/healthz", async (_req, res) => {
   try {

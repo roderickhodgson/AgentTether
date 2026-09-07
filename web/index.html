@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AgentTether — agents that pay for their own data</title>
+<style>
+  :root { color-scheme: dark; }
+  body { background: #0b0e14; color: #dbe2ee; font: 16px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0; padding: 48px 16px; }
+  main { max-width: 780px; margin: 0 auto; }
+  h1 { font-size: 24px; color: #8ab4ff; margin: 0 0 8px; }
+  h2 { font-size: 15px; color: #8ab4ff; margin: 32px 0 8px; }
+  p { color: #b9c3d4; }
+  code, pre { background: #10141d; border: 1px solid #1e2635; border-radius: 8px; }
+  code { padding: 1px 6px; font-size: 13px; }
+  pre { padding: 14px; overflow-x: auto; font-size: 13px; }
+  .foot { color: #7a8699; font-size: 12px; margin-top: 40px; border-top: 1px solid #1e2635; padding-top: 14px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>AgentTether</h1>
+  <p>AI agents buy blockchain event watches with x402: the agent signs one Permit2
+  voucher (worst case = the quoted ceiling), a Substreams stream meters the blocks
+  actually processed, and settlement is pro-rata — exactly the blocks billed, delivered
+  to the agent's webhook only after the settlement receipt confirms.</p>
+
+  <h2>Ask your agent</h2>
+  <p>Give your coding agent (opencode, Claude Code, …) a prompt like:</p>
+  <pre>"Using the AgentTether API at http://localhost:8080, watch Ethereum mainnet USDC
+for any transfer ≥ 1,000 USDC for the next 60 seconds. Pay for it yourself with x402
+(your agent wallet is already Permit2-approved), then report what arrived."</pre>
+  <p>The agent negotiates the 402, signs the voucher, waits for the webhook, and hands
+  you back a link like <code>…/w/&lt;intent-id&gt;</code> — this site renders what
+  happened: the watch, the delivered events, and the settlement receipt.</p>
+
+  <h2>Try it without an agent</h2>
+  <p>Point the report page at any intent id: <code>/w/&lt;intent-id&gt;</code>. The API
+  must be reachable from your browser — when the backend runs locally, open the page
+  through the backend itself (<code>http://localhost:8080/w/&lt;id&gt;</code>); when this
+  page is hosted, pass the backend base as <code>?api=https://your-tunnel…</code>.</p>
+
+  <div class="foot">Data velocity on Ethereum mainnet; x402 settlement on Base Sepolia
+  (or Hedera testnet) — different chains by design. See the repo README for the
+  full architecture and the per-block billing model.</div>
+</main>
+</body>
+</html>

@@ -108,6 +108,9 @@ def main() -> None:
     print(f"narration: {final.get('narration') or factual_summary(final)}")
     if notice.get("tx_hash"):
         print(f"settlement: https://sepolia.basescan.org/tx/{notice['tx_hash']}")
+    import os
+    site = os.environ.get("DEMO_SITE_URL", f"{cfg.server_url}")
+    print(f"report page: {site}/w/{job_id}  ← shareable rendering of this watch")
     print("\ndemo agent: PASS")
 
 
