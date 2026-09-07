@@ -92,6 +92,25 @@ def test_resume_with_timeout_notice_narrates_expiry():
     assert "charged 500 atomic" in final["narration"]
 
 
+def test_zero_processed_timeout_says_nothing_was_charged():
+    graph, _ = make_graph()
+    run_to_pause(graph)
+    # the sweep's zero-processed-blocks timeout: no tx, no amount (the stream was
+    # stalled — the window never opened, deliberately unbilled)
+    final = graph.invoke(Command(resume={"type": "intent.timeout", "intent_id": "j-1"}), {"configurable": {"thread_id": "t-1"}})
+    assert "NOTHING was charged" in final["narration"]
+    assert "never opened" in final["narration"]
+    assert "USDC" in final["narration"]  # asset named, not the raw address
+
+
+def test_watchdog_wake_is_called_out():
+    graph, _ = make_graph()
+    run_to_pause(graph)
+    synthetic = {**TIMEOUT, "synthetic": True}
+    final = graph.invoke(Command(resume=synthetic), {"configurable": {"thread_id": "t-1"}})
+    assert "watchdog" in final["narration"]
+
+
 def test_scripted_reissue_loop_negotiates_a_second_voucher():
     graph, stream = make_graph()
     # budget is part of the input state — rebuild with budget 1

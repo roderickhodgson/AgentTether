@@ -88,6 +88,10 @@ def main() -> None:
         thread,
     )
     job_id = paused.get("job_id", "?")
+    w = paused.get("watch", {})
+    min_atomic = int(str(w.get("min_amount_atomic", "0") or 0))
+    usdc = f" (≈ {min_atomic / 1e6:,.0f} USDC)" if min_atomic and min_atomic % 1_000_000 == 0 else ""
+    print(f"plan: watch {w.get('target_contract')} for transfers ≥ {min_atomic:,} atomic{usdc}, ttl {w.get('ttl_seconds')}s — \"{w.get('query_intent')}\"")
     print(f"negotiated: job {job_id} · quoted ceiling {paused.get('quoted_ceiling')} atomic")
     print("⏸  PAUSED — agent asleep on wait_for_webhook (zero compute)…")
     arm_watchdog(int(paused.get("watch", {}).get("ttl_seconds", 60)) + 180)

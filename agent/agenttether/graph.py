@@ -29,6 +29,44 @@ DISCLOSURE = (
     "testnet). The observed data and the payment rail are on different chains by design."
 )
 
+# Known capture assets — narration names the token, not a raw address.
+KNOWN_ASSETS = {
+    "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48": "USDC",  # mainnet
+    "0x036cbd53842c5426634e7929541ec2318f3dcf7e": "USDC",  # Base Sepolia
+}
+
+
+def asset_name(contract: str | None) -> str:
+    return KNOWN_ASSETS.get((contract or "").lower()) or (contract or "unknown contract")
+
+
+def factual_summary(state: AgentState) -> str:
+    notice = state.get("notice") or {}
+    events = notice.get("events") or []
+    asset = asset_name(state.get("watch", {}).get("target_contract"))
+    if events:
+        head = (
+            f"Watched {asset} for transfers; the window delivered "
+            f"{notice.get('events_matched', len(events))} matching events; settlement "
+            f"charged {notice.get('amount_charged_atomic', '?')} atomic."
+        )
+    elif notice.get("tx_hash"):
+        head = (
+            f"Watched {asset} for transfers; the window expired without a match; the "
+            f"idle watch was charged {notice.get('amount_charged_atomic', '?')} atomic "
+            f"(its full block budget)."
+        )
+    else:
+        # No tx, no amount: the sweep's zero-processed-blocks timeout — the window
+        # never opened (the stream processed nothing in-window), so nothing was billed.
+        head = (
+            f"Watched {asset} for transfers; the window expired with no blocks "
+            f"processed — NOTHING was charged (the watch never opened)."
+        )
+    if notice.get("synthetic"):
+        head += " (woke by the agent's own watchdog — the backend webhook never arrived)"
+    return f"{head} {DISCLOSURE}"
+
 DEFAULT_WATCH = {
     "target_contract": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",  # mainnet USDC
     "min_amount_atomic": "1000000",  # ≥ 1 USDC — dense enough to fire in the first block
@@ -131,11 +169,20 @@ def build_graph(
     # ── observe (LLM): narrate the delivery + disclosure ────────────────────
     def observe(state: AgentState) -> dict[str, Any]:
         notice = state.get("notice") or {}
+        asset = asset_name(state.get("watch", {}).get("target_contract"))
+        guidance = (
+            f"- asset: {asset}\n"
+            "- notice with events: report how many arrived and the charged amount\n"
+            "- notice with a tx but no events: the window expired idle and its full block budget was charged\n"
+            "- notice with no tx: the window never opened (no blocks processed) and NOTHING was charged\n"
+            "- synthetic notice: the agent's own watchdog woke it — the backend webhook never arrived\n"
+        )
         prompt = (
             '{{"kind": "observe"}}\n'
             f"watch: {state.get('watch')}\n"
             f"quoted ceiling (atomic): {state.get('quoted_ceiling')}\n"
             f"webhook notice: {notice}\n"
+            f"{guidance}"
             f"disclosure to append verbatim: {DISCLOSURE}"
         )
         try:
@@ -184,15 +231,3 @@ def build_graph(
     graph.add_edge("observe", "decide")
     graph.add_conditional_edges("decide", route_decide, {"negotiate": "negotiate", END: END})
     return graph.compile(checkpointer=checkpointer)
-
-
-def factual_summary(state: AgentState) -> str:
-    notice = state.get("notice") or {}
-    events = notice.get("events") or []
-    charged = notice.get("amount_charged_atomic", "?")
-    head = (
-        f"Watched {state.get('watch', {}).get('target_contract', '?')} for transfers; the window "
-        f"{'delivered ' + str(notice.get('events_matched', len(events))) + ' matching events' if events else 'expired without a match'}"
-        f"; settlement charged {charged} atomic."
-    )
-    return f"{head} {DISCLOSURE}"
