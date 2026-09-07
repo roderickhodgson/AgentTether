@@ -110,21 +110,63 @@ function blockTimestamp(clock: Clock): string {
 
 // Sampled progress heartbeat: the lag signal is chain-time-vs-wall-clock — seconds during
 // live tail, hours during catch-up. (ModulesProgress carries no usable head block.)
+// When the stream's Clock carries no timestamp, lag is UNKNOWN — reporting 0.0 there
+// masked a real stall once (the 2026-09-07 incident), so it now says so explicitly.
 let blocksSinceHeartbeat = 0n;
 let lastHeartbeatAt = 0;
+let undoCount = 0;
 
 function heartbeat(clock: Clock) {
   blocksSinceHeartbeat += 1n;
+  lastStreamActivity = Date.now();
   const now = Date.now();
   if (blocksSinceHeartbeat < HEARTBEAT_BLOCKS && now - lastHeartbeatAt < HEARTBEAT_MS) return;
   blocksSinceHeartbeat = 0n;
   lastHeartbeatAt = now;
   const chainMs = Number(clock.timestamp?.seconds ?? 0n) * 1000;
-  const behindMin = chainMs ? (now - chainMs) / 60000 : 0;
+  if (!chainMs) {
+    logger.info(
+      { block: clock.number.toString(), behindWallClockMin: null, undosSoFar: undoCount },
+      `stream progress: block ${clock.number} · lag unknown (no clock timestamp)`,
+    );
+    return;
+  }
+  const behindMin = (now - chainMs) / 60000;
   logger.info(
-    { block: clock.number.toString(), chainTime: new Date(chainMs).toISOString(), behindWallClockMin: Number(behindMin.toFixed(1)) },
+    { block: clock.number.toString(), chainTime: new Date(chainMs).toISOString(), behindWallClockMin: Number(behindMin.toFixed(1)), undosSoFar: undoCount },
     `stream progress: block ${clock.number} · ${behindMin.toFixed(1)} min behind wall clock`,
   );
+}
+
+// ── Stall watchdog ──────────────────────────────────────────────────────────
+// A hung endpoint delivers no blocks, no close, no error — runStream's await just
+// parks (observed live: 2.5h of silence while test intents expired unbilled). The
+// watchdog treats "no stream activity for STALL_MS" as a dead connection and stops
+// the current handle, so the manager's retry loop reconnects. Activity = any block
+// or undo signal.
+const STALL_MS = Number(process.env.SUBSTREAMS_STALL_MS ?? 3 * 60_000);
+let lastStreamActivity = Date.now();
+let stallTimer: NodeJS.Timeout | null = null;
+
+function startStallWatchdog() {
+  if (stallTimer) return;
+  stallTimer = setInterval(() => {
+    const idleMs = Date.now() - lastStreamActivity;
+    if (idleMs <= STALL_MS) return;
+    const current = currentStream;
+    if (!current) return; // between attempts — the retry loop's backoff covers this
+    logger.warn(
+      { idleMs: Math.round(idleMs / 1000), stallLimitS: Math.round(STALL_MS / 1000), undosSoFar: undoCount },
+      `stream stalled — no activity for ${Math.round(idleMs / 1000)}s, forcing reconnect`,
+    );
+    lastStreamActivity = Date.now(); // re-arm; the retry loop logs the reconnect
+    try {
+      current.stop();
+    } catch (e) {
+      logger.error({ err: e instanceof Error ? e.message : e }, "stall watchdog stop failed");
+    }
+  }, 15_000);
+  stallTimer.unref();
 }
 
 // Oneshot capture (3.4): every allowlisted transfer in the block, independent of intent
@@ -268,7 +310,8 @@ async function runStream(
   emitter.on("undo", (undo) => {
     // Chain reorg: resume from the last valid block. Metered counters are NOT rolled
     // back (demo-adequate — an undoed match may leave an off-by-one in events_matched).
-    logger.warn({ lastValidCursor: undo.lastValidCursor.slice(0, 24) }, "undo signal — reverting cursor to last valid block");
+    logger.warn({ lastValidCursor: undo.lastValidCursor.slice(0, 24), undoNumber: ++undoCount }, "undo signal — reverting cursor to last valid block");
+    lastStreamActivity = Date.now();
     state.lastCursor = undo.lastValidCursor;
     writeChain = writeChain
       .then(() => saveCursor(undo.lastValidCursor, 0n))
@@ -320,6 +363,7 @@ export async function startSubstreams(): Promise<void> {
   // retrying until the dead holder's lease goes stale and this instance takes over.
   const { acquireLease } = await import("../lease.js");
   await acquireLease();
+  startStallWatchdog();
   const state: StreamState = { lastCursor: (await getSavedCursor()) ?? undefined };
   logger.info(
     {
