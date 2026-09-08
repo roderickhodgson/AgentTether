@@ -8,7 +8,7 @@
  * The report is PRESENTATION-shaped: the DB's bare-hex webhook convention is
  * converted to canonical 0x form here (the report is a new consumer, not the webhook).
  */
-import type { Express, Request, Response } from "express";
+import express, { type Express, Request, Response } from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { annotateIntent, prisma } from "../db.js";
@@ -242,11 +242,8 @@ export function mountReport(app: Express): void {
     });
   });
 
-  app.get("/", (_req: Request, res: Response) => {
-    const page = path.join(path.dirname(fileURLToPath(import.meta.url)), "../../web/index.html");
-    res.sendFile(page, (err) => {
-      if (err) res.send("AgentTether API — see /w/:id for watch reports");
-    });
-  });
+  // The static pages themselves (/, /report.html) — same origin as the API, so the
+  // locally-served demo needs no ?api= override.
+  app.use(express.static(path.join(path.dirname(fileURLToPath(import.meta.url)), "../../web")));
   logger.info("results pages mounted: / (recent) · /w/:id (+ JSON report, annotate, recent)");
 }

@@ -26,6 +26,23 @@
   .ok { color: #6fe3a5; } .zero { color: #ffd479; }
   .foot { color: #7a8699; font-size: 12px; margin-top: 28px; border-top: 1px solid #1e2635; padding-top: 14px; }
   .err { color: #ff8f8f; }
+  /* ── the flow-chart stepper ── */
+  .stepper { position: relative; padding-left: 8px; }
+  .step { position: relative; padding: 0 0 22px 34px; }
+  .step:last-child { padding-bottom: 4px; }
+  .step::before { /* the connector line */
+    content: ""; position: absolute; left: 13px; top: 22px; bottom: -4px; width: 2px; background: #1e2635;
+  }
+  .step:last-child::before { display: none; }
+  .dot { position: absolute; left: 0; top: 0; width: 28px; height: 28px; border-radius: 50%;
+         display: flex; align-items: center; justify-content: center; font-size: 14px;
+         border: 2px solid #2a3752; background: #10141d; color: #7a8699; }
+  .done .dot { border-color: #1f5c40; color: #6fe3a5; }
+  .agent .dot { border-color: #2a3752; color: #c792ea; }
+  .step .t { font-weight: bold; letter-spacing: .4px; }
+  .step .when { color: #7a8699; font-size: 12px; margin-left: 8px; }
+  .step .detail { color: #7a8699; font-size: 12.5px; margin-top: 3px; }
+  .step .detail a { color: #8ab4ff; }
 </style>
 </head>
 <body>
@@ -45,7 +62,56 @@ const fmt = (atomic) => {
   return Number.isFinite(n) ? `${n.toLocaleString()} atomic${n >= 1e6 ? ` (≈ ${(n / 1e6).toLocaleString()} USDC)` : ""}` : atomic;
 };
 const short = (h) => h ? `${h.slice(0, 10)}…${h.slice(-6)}` : "—";
+const when = (iso) => new Date(iso).toLocaleTimeString();
 const row = (k, v) => `<div class="row"><span class="k">${k}</span><span>${v}</span></div>`;
+
+// lifecycle steps → stepper rows. Backend steps render in canonical order; agent
+// annotations keep their place (inserted by time). Pending backend steps (never fired)
+// render greyed with an explainer.
+const CANON = ["requested", "paid", "window_opened", "settled", "expired", "delivered"];
+const LABEL = {
+  requested: "requested", paid: "paid (voucher verified)", window_opened: "window opened",
+  settled: "settled", expired: "window expired", delivered: "webhook delivered",
+};
+
+function detailHtml(step, d = {}) {
+  const link = (label, url) => `<a href="${url}" target="_blank">${label}</a>`;
+  switch (step) {
+    case "requested": return `ceiling ${fmt(d.max_limit || "?")}`; // detail set below if absent
+    case "paid": return `payer ${d.payer ? short(d.payer) : "verified"} · nonce ${d.nonce ?? ""}`;
+    case "window_opened": return `first in-window block: ${d.start_block}`;
+    case "settled": return `${fmt(d.amount_charged_atomic)} → ${link(short(d.tx), `https://sepolia.basescan.org/tx/0x${String(d.tx).replace(/^0x/, "")}`)}`;
+    case "expired": return d.tx
+      ? `idle full budget ${fmt(d.amount_charged_atomic)} → ${link(short(d.tx), `https://sepolia.basescan.org/tx/0x${String(d.tx).replace(/^0x/, "")}`)}`
+      : (d.note || "no settlement tx");
+    case "delivered": return d.ok ? `delivered (attempt ${d.attempt})` : (d.note || "delivery failed");
+    default: return Object.entries(d).map(([k, v]) => `${k}: ${String(v).slice(0, 60)}`).join(" · ");
+  }
+}
+
+function stepperHtml(lifecycle) {
+  const steps = [...lifecycle].sort((a, b) => new Date(a.at) - new Date(b.at));
+  const seen = new Set(steps.map((s) => s.step));
+  let html = '<div class="card"><div class="row" style="margin-bottom:14px"><span class="k">flow</span><span>each step, in order</span></div><div class="stepper">';
+  for (const s of steps) {
+    const isAgent = s.step.startsWith("agent:");
+    const cls = isAgent ? "step agent done" : "step done";
+    const label = isAgent ? s.step.replace("agent: ", "") : (LABEL[s.step] || s.step);
+    html += `<div class="${cls}"><span class="dot">${isAgent ? "◆" : "✓"}</span>
+      <span class="t">${label}</span><span class="when">${when(s.at)}</span>
+      ${!isAgent && Object.keys(s.detail || {}).length ? `<div class="detail">${detailHtml(s.step, s.detail)}</div>` : ""}
+      ${isAgent && Object.keys(s.detail || {}).length ? `<div class="detail">${detailHtml(s.step, s.detail)}</div>` : ""}</div>`;
+  }
+  // pending backend steps the request never reached
+  for (const c of CANON) {
+    if (seen.has(c)) continue;
+    const why = c === "window_opened" ? "never — no block arrived in-window"
+      : c === "settled" ? "never — the window never opened, nothing charged"
+      : c === "delivered" ? "pending" : "skipped";
+    html += `<div class="step"><span class="dot">–</span><span class="t" style="color:#4d5a70">${LABEL[c]}</span><span class="when">${why}</span></div>`;
+  }
+  return html + "</div></div>";
+}
 
 (async () => {
   try {
@@ -63,15 +129,10 @@ const row = (k, v) => `<div class="row"><span class="k">${k}</span><span>${v}</s
         ${row("window", `${new Date(i.created_at).toLocaleString()} → ${new Date(i.expires_at).toLocaleString()}`)}
         ${row("budget", `${i.budget_blocks} blocks × ${i.per_block_rate_atomic} atomic — ceiling ${fmt(i.max_limit_atomic)}`)}
       </div>`;
-    const settle = `
-      <div class="card">
-        <div class="row"><span class="k">settlement</span><span class="${s.tx_hash ? "ok" : "zero"}">${
-          s.tx_hash
-            ? `${s.amount_charged_atomic} atomic charged → <a href="${s.explorer_url}" target="_blank">${short(s.tx_hash)}</a>`
-            : s.note.replace("The window expired with no blocks processed — ", "")
-        }</span></div>
-        <div class="row"><span class="k"></span><span class="zero">${s.tx_hash ? "" : s.note}</span></div>
-      </div>`;
+    const settle = s.tx_hash ? `
+      <div class="card"><div class="row"><span class="k">settlement</span><span class="ok">
+        ${s.amount_charged_atomic} atomic charged → <a href="${s.explorer_url}" target="_blank">${short(s.tx_hash)}</a>
+      </span></div></div>` : "";
     const events = m.events.length ? `
       <div class="card">
         <div class="row"><span class="k">delivered events</span><span>${m.count} matched${m.truncated ? ` (showing first ${m.stored})` : ""}</span></div>
@@ -83,7 +144,7 @@ const row = (k, v) => `<div class="row"><span class="k">${k}</span><span>${v}</s
           <td><a href="https://etherscan.io/tx/${e.tx_hash}" target="_blank">${short(e.tx_hash)}</a></td>
         </tr>`).join("")}</table>
       </div>` : "";
-    document.getElementById("content").innerHTML = head + settle + events;
+    document.getElementById("content").innerHTML = head + stepperHtml(r.lifecycle || []) + settle + events;
     document.getElementById("disclosure").textContent = r.disclosure;
   } catch (e) {
     document.getElementById("sub").innerHTML = `<span class="err">failed to load: ${e.message}</span>` +

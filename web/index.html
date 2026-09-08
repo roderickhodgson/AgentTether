@@ -15,6 +15,20 @@
   code { padding: 1px 6px; font-size: 13px; }
   pre { padding: 14px; overflow-x: auto; font-size: 13px; }
   .foot { color: #7a8699; font-size: 12px; margin-top: 40px; border-top: 1px solid #1e2635; padding-top: 14px; }
+  .recent { display: grid; gap: 10px; }
+  .req { display: flex; justify-content: space-between; align-items: center; gap: 12px;
+         border: 1px solid #1e2635; border-radius: 10px; padding: 12px 16px; background: #10141d;
+         text-decoration: none; color: #dbe2ee; }
+  .req:hover { border-color: #2a3752; }
+  .req .l { display: flex; flex-direction: column; gap: 2px; }
+  .req .a { color: #8ab4ff; font-size: 14px; }
+  .req .m { color: #7a8699; font-size: 12px; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px; border: 1px solid #2a3752; white-space: nowrap; }
+  .SETTLED { color: #6fe3a5; border-color: #1f5c40; }
+  .TIMEOUT { color: #ffd479; border-color: #5c4a1f; }
+  .MONITORING, .SETTLING { color: #8ab4ff; border-color: #2a3752; }
+  .SETTLE_FAILED, .PENDING_PAYMENT { color: #ff8f8f; border-color: #5c1f1f; }
+  .err { color: #ff8f8f; }
 </style>
 </head>
 <body>
@@ -25,24 +39,56 @@
   actually processed, and settlement is pro-rata — exactly the blocks billed, delivered
   to the agent's webhook only after the settlement receipt confirms.</p>
 
+  <h2>Recent requests</h2>
+  <p>The most recent watches (watch parameters only — wallets are never shown). Click
+  any to see its flow: every step with ticks and timestamps.</p>
+  <div class="recent" id="recent">loading…</div>
+
   <h2>Ask your agent</h2>
   <p>Give your coding agent (opencode, Claude Code, …) a prompt like:</p>
   <pre>"Using the AgentTether API at http://localhost:8080, watch Ethereum mainnet USDC
 for any transfer ≥ 1,000 USDC for the next 60 seconds. Pay for it yourself with x402
 (your agent wallet is already Permit2-approved), then report what arrived."</pre>
-  <p>The agent negotiates the 402, signs the voucher, waits for the webhook, and hands
-  you back a link like <code>…/w/&lt;intent-id&gt;</code> — this site renders what
-  happened: the watch, the delivered events, and the settlement receipt.</p>
-
-  <h2>Try it without an agent</h2>
-  <p>Point the report page at any intent id: <code>/w/&lt;intent-id&gt;</code>. The API
-  must be reachable from your browser — when the backend runs locally, open the page
-  through the backend itself (<code>http://localhost:8080/w/&lt;id&gt;</code>); when this
-  page is hosted, pass the backend base as <code>?api=https://your-tunnel…</code>.</p>
+  <p>The 202 response carries a <code>report_url</code> back to your agent — that's a
+  link into this site's flow-chart rendering of the whole process.</p>
 
   <div class="foot">Data velocity on Ethereum mainnet; x402 settlement on Base Sepolia
-  (or Hedera testnet) — different chains by design. See the repo README for the
-  full architecture and the per-block billing model.</div>
+  (or Hedera testnet) — different chains by design. This page fetches the API at
+  <code id="apiBase">same origin</code> — override with <code>?api=</code> (a hosted page
+  needs the backend on https, e.g. a tunnel). See the repo README for the architecture.</div>
 </main>
+<script>
+const params = new URLSearchParams(location.search);
+const api = params.get("api") || location.origin;
+document.getElementById("apiBase").textContent = api;
+
+const fmt = (atomic) => {
+  const n = Number(atomic);
+  return Number.isFinite(n) ? `${n.toLocaleString()} atomic${n >= 1e6 ? ` (≈ ${(n / 1e6).toLocaleString()} USDC)` : ""}` : atomic;
+};
+
+(async () => {
+  try {
+    const res = await fetch(`${api}/api/v1/intents/recent`);
+    if (!res.ok) throw new Error(`API ${res.status}`);
+    const { requests } = await res.json();
+    if (!requests.length) {
+      document.getElementById("recent").textContent = "no requests yet — be the first: ask your agent above.";
+      return;
+    }
+    document.getElementById("recent").innerHTML = requests.map(r => `
+      <a class="req" href="report.html?i=${r.id}${api !== location.origin ? "&api=" + encodeURIComponent(api) : ""}">
+        <span class="l">
+          <span class="a">${r.asset} — fires on transfers ≥ ${fmt(r.min_amount_atomic)}</span>
+          <span class="m">${new Date(r.created_at).toLocaleString()} · ${r.events_matched} event(s)${r.settled ? " · settled on-chain" : ""}</span>
+        </span>
+        <span class="badge ${r.status}">${r.status}</span>
+      </a>`).join("");
+  } catch (e) {
+    document.getElementById("recent").innerHTML =
+      `<span class="err">failed to load recent requests: ${e.message} — the API at <code>${api}</code> must be reachable (same origin, or pass <code>?api=</code>).</span>`;
+  }
+})();
+</script>
 </body>
 </html>
