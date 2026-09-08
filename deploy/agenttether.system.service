@@ -1,0 +1,33 @@
+# AgentTether backend — SYSTEM-wide systemd unit (Linux servers, e.g. EC2).
+# This is the production variant of deploy/agenttether.service (which is a user unit
+# for desktop Linux). Install:
+#   sudo cp deploy/agenttether.system.service /etc/systemd/system/agenttether.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now agenttether
+#   journalctl -u agenttether -f
+# Edit User= and the WorkingDirectory/ExecStart paths to match the deployment
+# (they assume an "agenttether" user and /opt/agenttether below).
+
+[Unit]
+Description=AgentTether backend (x402 <-> Substreams)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=agenttether
+Group=agenttether
+WorkingDirectory=/opt/agenttether
+ExecStart=/bin/bash /opt/agenttether/deploy/start.sh
+Restart=on-failure
+# Restart within the single-writer lease TTL (30s) exits immediately (lease still
+# fresh); after that the restart takes over the stale lease. 10s paces those retries.
+RestartSec=10
+Environment=HOME=/opt/agenttether
+Environment=NODE_ENV=production
+# .env is loaded by dotenv from the working directory — keep it root-owned, 600.
+# Production env (see deploy/README.md): DATABASE_URL, SUBSTREAMS_API_KEY,
+# EVM_PRIVATE_KEY, PAY_TO_ADDRESS, PUBLIC_SITE_URL, PUBLIC_BASE_URL,
+# RECENT_INTENTS_LIMIT.
+
+[Install]
+WantedBy=multi-user.target

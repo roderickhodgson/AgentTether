@@ -25,6 +25,22 @@ AgentTether lets autonomous AI agents provision and pay for conditional, asynchr
 
 ---
 
+## 🧩 Services (what runs, where)
+
+| Service | Local port | What it is | How (local) |
+|---|---|---|---|
+| **Backend API** | `:8080` | Node/Express — x402 endpoints (`/stream`, `/oneshot`), lifecycle JSON (`/api/v1/intents/:id/report`), `recent`, `annotate`, the Substreams stream, sweeps. **API-only — serves no HTML.** | `npm start` or the launchd daemon (`deploy/`) |
+| **Web pages** | `:8888` | Static — landing + the flow-chart report pages. Hosted on Netlify in production. | `npx netlify dev` (or `python3 -m http.server 8090 -d web`) |
+| **Agent** (on demand) | — | Python/LangGraph test agent — durable interrupts let it park at `wait_for_webhook` and resume on webhook delivery. | `agent/.venv/bin/python scripts/demo_agent.py` |
+| **Postgres** | Neon cloud | Intents, stream cursor, capture, lease. | `DATABASE_URL` in `.env` |
+
+Local URL map: the pages default their API base to same-origin — with the web on `:8888`
+and the backend on `:8080`, open **`http://localhost:8888/?api=http://localhost:8080`**
+(the report links carry it through). The backend's report links point at the web tier
+via `PUBLIC_SITE_URL` (default `http://localhost:8888`); `PUBLIC_BASE_URL` is the
+backend's own base for tunnels/domains. Production deploy: `deploy/README.md` (EC2 +
+Netlify).
+
 ## 🗺️ System Architecture
 
 > Three views: the components and the deliberate two-plane split, the end-to-end block-metered flow (demo beat A), and the intent lifecycle (the `status` enum from Phase 1). Note the **absence of any edge between the data plane and the payment plane** — they are independent by design.
@@ -204,7 +220,7 @@ stateDiagram-v2
   - **Rejection triage (earned live against the hosted facilitator):** consumed-nonce rejections → leave `SETTLING` + CRITICAL (money may have moved; manual runbook check — never auto-flip to `SETTLE_FAILED`); deadline-expired rejections → `TIMEOUT` **uncollected** (downtime beyond the ttl+buffer window voids the voucher; agent keeps funds, no data); structural rejections (bad signature, missing requirements) → `SETTLE_FAILED`; **everything else is transient by default** — the hosted facilitator bounced a valid settle mid-queue (`invalid_exact_evm_transaction_failed` with a stale wallet nonce under parallel load), so unknown rejections stay `SETTLING` for sweep retries bounded by the deadline window.
 
 ### Phase 5: Multi-Agent Client Implementation
-> **Goal:** Build the LangGraph AI client that interacts with the backend — **done + live-verified** (`agent/`, 5 commits; the agent in the demo is opencode itself, driving the graph over its server API).
+> **Goal:** Build the LangGraph AI client that interacts with the backend — **done + live-verified** (`agent/`, 5 commits; the agent in the demo is opencode itself, driving the graph over its server API). **Why LangGraph at all:** it is the *test-agent harness* — its durable interrupts (`interrupt()` + checkpointer) let an agent park at `wait_for_webhook` with zero compute while the watch runs and resume on webhook delivery, and Studio makes that pause visible for the demo. The API itself is deliberately agent-agnostic: any x402-capable LLM can drive it without LangGraph.
 - [x] **5.1** Create a new Python project for the AI agent client. **Done:** `agent/` — venv + pinned deps (`x402[httpx,evm]==2.22.0`, web3, langgraph; the Python SDK lags the Node pins at 2.25.0 — skew spike-gated), `pytest` offline suite (24 tests), CI job.
 - [x] **5.2** **Day-1 spike (narrowed):** the Python `x402` SDK **natively supports `upto`** — **confirmed live, no fallback needed**: `UptoEvmScheme` wraps an `eth_account` signer directly, requires `extra.facilitatorAddress` from our 402 (present), and handles the `eip2612GasSponsoring`/`erc20ApprovalGasSponsoring` extension signing *inside* the SDK (`_try_sign_extensions`). The spike (`agent/scripts/spike_e2e.py`) ran the full loop against the live backend: beat A fired in the first in-window block → `settlement.confirmed` webhook, 12 events, pro-rata settle of 100 atomic; beat B idle 60s → `intent.timeout`, full 5-block budget (500 atomic); beat C oneshot 200 + transfers. The hand-rolled `eth_account` path survives only in the allowance bootstrap (5.2a). Ecosystem prior art for the LangGraph+x402 composition: `openlibx402-langgraph` — **not adopted** (Solana-only; EVM/Base is unstarted on its roadmap; our async webhook pause is beyond its request/response loop).
 - [x] **5.2a** **Permit2 approval bootstrap (capability-detect, don't assume):** **Done:** `agent/agenttether/allowance.py` — cheap pre-check every run (the allowance *decrements* per settlement, so `state.json` is a fast path, never the source of truth), gasless branch signs an EIP-2612 permit when the facilitator advertises the sponsoring extensions, self-funded branch broadcasts the approval (unfunded → fail-fast with a faucet pointer). `AGENT_WALLET` pins are validated against the key at load — a mismatched pin would sign with the wrong identity. before the first x402 flow, the agent must ensure USDC is approved for the canonical Permit2 contract. Implement a three-way branch:

@@ -57,3 +57,95 @@ stale-takeover into seamless crash recovery.
 - Bumped node versions: update the path in `start.sh` (and the plist `PATH`).
 - The lease holder identity is `hostname:pid:started-at` — visible in the logs and in
   `select * from process_lease;` for forensic clarity.
+
+---
+
+# Cloud deployment: backend on EC2 + web on Netlify
+
+The tiers are separate: **the backend is API-only** (x402 endpoints, lifecycle JSON,
+annotate, recent) and **the web pages live on Netlify**. The pages carry their own API
+base (`web/config.js`, overridable per-URL with `?api=`), so the only coupling is CORS —
+which the report/recent/annotate endpoints already allow (`*`).
+
+## 1. Backend on EC2 (Ubuntu)
+
+```bash
+# one-time server prep (Ubuntu 24.04 LTS; t3.micro is plenty)
+sudo apt update && sudo apt install -y git curl
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash   # or nodesource
+nvm install 25 && nvm alias default 25
+
+# app
+sudo useradd -r -m -d /opt/agenttether -s /usr/sbin/nologin agenttether
+sudo git clone <repo-url> /opt/agenttether && sudo chown -R agenttether: /opt/agenttether
+cd /opt/agenttether
+sudo -u agenttether npm ci && sudo -u agenttether npx prisma generate
+
+# secrets + env (NEVER commit .env) — this server's own database, not your laptop's
+sudo -u agenttether cp .env.example .env    # then edit:
+#   DATABASE_URL=<production Neon url>   SUBSTREAMS_API_KEY=<key>
+#   EVM_PRIVATE_KEY=<payer key>          PAY_TO_ADDRESS=<receiver>
+#   PUBLIC_SITE_URL=https://<your-netlify-site>     # report links point at the web tier
+#   PUBLIC_BASE_URL=https://api.<your-domain>       # the backend's own https base
+#   RECENT_INTENTS_LIMIT=5
+
+sudo -u agenttether npx prisma db push      # schema onto the production database
+```
+
+Service: `sudo cp deploy/agenttether.system.service /etc/systemd/system/agenttether.service`
+(edit `User=`/paths if yours differ), then `daemon-reload` + `enable --now` — see the
+unit header for commands. Security group: **22** (ssh), **80 + 443** (TLS redirect +
+proxy). The single-writer lease decides who streams: once the EC2 daemon claims the
+lease, any local `npm start` correctly exits instead of double-metering.
+
+## 2. HTTPS in front of the backend (mandatory)
+
+The Netlify pages are `https` — browsers block them from fetching a plain-`http` API
+(mixed content). Two paths:
+
+**a) Real domain (primary, once you have DNS):** point an A record at the EC2 IP and
+put Caddy in front (auto-TLS, no cert ceremony):
+
+```
+# /etc/caddy/Caddyfile
+api.your-domain.xyz {
+    reverse_proxy localhost:8080
+}
+```
+`sudo apt install caddy`, paste, `sudo systemctl reload caddy`. Set
+`PUBLIC_BASE_URL=https://api.your-domain.xyz` in the backend `.env`.
+
+**b) No DNS yet (interim):** a Cloudflare tunnel gives you an https URL in one command:
+
+```bash
+cloudflared tunnel --url http://localhost:8080   # prints https://<random>.trycloudflare.com
+```
+Set `PUBLIC_BASE_URL` to that URL. Tunnels are ephemeral on the free tier — fine for a
+demo session, replace with (a) for anything persistent.
+
+## 3. Web on Netlify
+
+```bash
+# set the API base the pages will use in production:
+$EDITOR web/config.js    # window.AGENTTETHER_API = "https://api.your-domain.xyz";
+npx netlify deploy --prod --dir web
+```
+Then set the backend's `PUBLIC_SITE_URL` to the Netlify URL (`https://<site>.netlify.app`)
+and restart the service — report links in the 202 bodies and webhooks point there. The
+`/w/:id` deep links work via the rewrite in `netlify.toml`; `?api=` still overrides per
+URL (pointing a deployed site at a tunnelled local backend needs no redeploy).
+
+## 4. Production env matrix
+
+| Var | Tier | Purpose |
+|---|---|---|
+| `PUBLIC_SITE_URL` | backend | where report links point (the web tier) |
+| `PUBLIC_BASE_URL` | backend | the backend's own https base (tunnel/domain) |
+| `RECENT_INTENTS_LIMIT` | backend | home-page recent list size (query param caps at 20) |
+| `web/config.js` | web tier | the API base the pages fetch |
+
+## 5. Local, still-first
+
+Nothing above is required to develop: backend `npm start` (API-only on `:8080`), web
+`npx netlify dev` (`:8888`) with `?api=http://localhost:8080`, agent on demand — see
+the README's Services table.

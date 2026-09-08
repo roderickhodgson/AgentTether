@@ -5,6 +5,15 @@ provisions paid blockchain watches, and — in the LangGraph build — pauses pa
 for webhook delivery instead of polling. See the repo-root `README.md` (Phase 5) for
 the design notes; this file is the runbook.
 
+## Why LangGraph
+
+LangGraph is the **test-agent harness**: its durable interrupts (`interrupt()` +
+checkpointer) let an agent park at `wait_for_webhook` — zero compute while the watch
+runs — and resume from the webhook thread via `Command(resume=notice)`. Studio renders
+that pause, which is the demo's centerpiece. The AgentTether API is agent-agnostic by
+design: any x402-capable LLM can drive it with nothing but HTTP; LangGraph makes the
+*waiting* first-class, durable, and inspectable.
+
 ## Setup
 
 ```bash
