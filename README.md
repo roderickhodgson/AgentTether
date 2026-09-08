@@ -34,12 +34,13 @@ AgentTether lets autonomous AI agents provision and pay for conditional, asynchr
 | **Agent** (on demand) | — | Python/LangGraph test agent — durable interrupts let it park at `wait_for_webhook` and resume on webhook delivery. | `agent/.venv/bin/python scripts/demo_agent.py` |
 | **Postgres** | Neon cloud | Intents, stream cursor, capture, lease. | `DATABASE_URL` in `.env` |
 
-Local URL map: the pages default their API base to same-origin — with the web on `:8888`
-and the backend on `:8080`, open **`http://localhost:8888/?api=http://localhost:8080`**
-(the report links carry it through). The backend's report links point at the web tier
-via `PUBLIC_SITE_URL` (default `http://localhost:8888`); `PUBLIC_BASE_URL` is the
-backend's own base for tunnels/domains. Production deploy: `deploy/README.md` (EC2 +
-Netlify).
+Local URL map: open **`http://localhost:8888/`** — the pages resolve their API base as
+`?api=` → `web/config.js` (empty locally) → the local backend (`:8080`), so it just
+works; `?api=` overrides per-URL (e.g. a tunnelled backend). The backend's report links
+point at the web tier via `PUBLIC_SITE_URL` (default `http://localhost:8888`);
+`PUBLIC_BASE_URL` is the backend's own base for tunnels/domains. Production deploy:
+`deploy/README.md` (EC2 + Netlify) — the deployed `config.js` sets the EC2 API base, so
+the localhost default never fires there.
 
 ## 🗺️ System Architecture
 

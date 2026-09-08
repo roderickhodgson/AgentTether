@@ -56,8 +56,9 @@
 <script>
 const params = new URLSearchParams(location.search);
 const id = params.get("i") || location.pathname.split("/").filter(Boolean).pop();
-// api base chain: ?api= → config.js → same origin
-const api = params.get("api") || window.AGENTTETHER_API || location.origin;
+// api base chain: ?api= → config.js → the local backend (:8080). The localhost
+// default never fires in production — the deployed config.js sets the real base.
+const api = params.get("api") || window.AGENTTETHER_API || "http://localhost:8080";
 
 const fmt = (atomic) => {
   const n = Number(atomic);

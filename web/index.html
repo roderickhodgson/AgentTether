@@ -65,8 +65,9 @@ for any transfer ≥ 1,000 USDC for the next 60 seconds. Pay for it yourself wit
 <script src="config.js"></script>
 <script>
 const params = new URLSearchParams(location.search);
-// api base chain: ?api= → config.js → same origin
-const api = params.get("api") || window.AGENTTETHER_API || location.origin;
+// api base chain: ?api= → config.js → the local backend (:8080). The localhost
+// default never fires in production — the deployed config.js sets the real base.
+const api = params.get("api") || window.AGENTTETHER_API || "http://localhost:8080";
 document.getElementById("apiBase").textContent = api;
 
 const fmt = (atomic) => {
