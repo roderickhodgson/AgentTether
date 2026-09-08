@@ -53,6 +53,14 @@ unset — observe never ran), and a `Command(resume)` completed with the disclos
 narration. Notes: `studio.py` compiles WITHOUT a checkpointer (the dev server injects
 its own persistence and rejects custom ones); the demo runner keeps its MemorySaver.
 
+### Flow-chart annotations
+
+The graph annotates each watch's flow-chart with its own LLM rows (`plan`,
+`observe`, `decide`, `decision`) via the backend's length-capped annotate endpoint —
+best-effort, failures never kill a run. Third-party agents can do the same; the chart
+always shows at least the backend lifecycle (requested → paid → window opened →
+settled/expired → delivered) with timestamps.
+
 ### The shareable results page
 
 The demo prints `report page: <url>/w/<intent-id>` — a human-readable rendering of the

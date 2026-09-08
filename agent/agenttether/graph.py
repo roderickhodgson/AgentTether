@@ -113,6 +113,7 @@ def build_graph(
     webhook_url: str,
     default_watch: dict[str, Any] | None = None,
     quote_source: Any | None = None,
+    annotate: Any | None = None,
 ) -> Any:
     """Compile the agent graph. Deps are injected — tests pass fakes.
 
@@ -151,6 +152,8 @@ def build_graph(
         if quote_source is not None:
             quoted = quote_source()
         quoted = str(quoted or job.get("quoted_ceiling") or "server-quoted")
+        if annotate:
+            annotate(job["job_id"], "plan", **{k: str(v) for k, v in watch.items()})
         return {"job_id": job["job_id"], "quoted_ceiling": quoted}
 
     # ── wait_for_webhook: THE PAUSE ─────────────────────────────────────────
@@ -185,6 +188,8 @@ def build_graph(
             f"{guidance}"
             f"disclosure to append verbatim: {DISCLOSURE}"
         )
+        if annotate and state.get("job_id"):
+            annotate(state["job_id"], "observe", note="narrated the delivery")
         try:
             narration = llm.complete(OBSERVE_SYSTEM, prompt).strip()
         except Exception as exc:  # noqa: BLE001 — narration must never kill the run
@@ -204,6 +209,8 @@ def build_graph(
             f"reissues_used: {state.get('reissues_used', 0)}\n"
             f"last notice: {state.get('notice')}"
         )
+        if annotate and state.get("job_id"):
+            annotate(state["job_id"], "decide", note="deciding: reissue or stop")
         try:
             parsed = parse_json(llm.complete(DECIDE_SYSTEM, prompt))
             decision = parsed.get("decision", "done")
@@ -211,6 +218,8 @@ def build_graph(
             decision = "done"
         if decision == "reissue" and state.get("reissues_used", 0) >= state.get("reissue_budget", 0):
             decision = "done"
+        if annotate:
+            annotate(state["job_id"], "decision", outcome=decision)
         # The Annotated[int, operator.add] counter only moves when WE move it: one
         # re-issue decrements the remaining budget by one — the loop is finite.
         return {"decision": decision, "reissues_used": 1 if decision == "reissue" else 0}

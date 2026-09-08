@@ -49,4 +49,17 @@ class DemoStack:
             webhook_url=webhook_url,
             default_watch=default_watch or DEFAULT_WATCH,
             quote_source=lambda: self.quote.last,
+            annotate=self._annotate,
         )
+
+    def _annotate(self, job_id: str, step: str, **detail) -> None:
+        """Best-effort flow-chart annotation — the backend chart gains the agent's own
+        LLM rows (plan / observe / decide). Failures never kill the run."""
+        try:
+            self.session.post(  # the wrapped session also works for plain calls
+                f"{self.config.server_url}/api/v1/intents/{job_id}/annotate",
+                json={"step": step, "detail": detail},
+                timeout=10,
+            )
+        except Exception:  # noqa: BLE001
+            pass
