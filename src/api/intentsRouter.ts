@@ -19,6 +19,7 @@ import type { Prisma } from "@prisma/client";
 import type { Request, Response } from "express";
 import { createIntent, getIntent, getIntentByPaymentNonce, storeVerifiedPayment } from "../db.js";
 import { discoverUpto, facilitator, NETWORK, USDC_ADDRESS, PAY_TO_ADDRESS, voucherPermittedAmount } from "../payments/facilitator.js";
+import { reportUrlFor } from "./report.js";
 import { quoteWindow, perBlockRateAtomic, blockTimeSeconds } from "../payments/pricing.js";
 import { logger } from "../logger.js";
 
@@ -198,7 +199,12 @@ async function verifySignedPayment(req: Request, res: Response, signature: strin
   const existing = await getIntentByPaymentNonce(permit2.nonce);
   if (existing) {
     if (existing.id === intentId && existing.status !== "PENDING_PAYMENT") {
-      res.status(202).json({ job_id: existing.id, status: existing.status, idempotent: true });
+      res.status(202).json({
+        job_id: existing.id,
+        status: existing.status,
+        idempotent: true,
+        report_url: reportUrlFor(existing.id, `${req.protocol}://${req.get("host")}`),
+      });
       return;
     }
     res.status(409).json({ error: "this voucher nonce is already bound to another intent" });
@@ -288,5 +294,6 @@ async function verifySignedPayment(req: Request, res: Response, signature: strin
     agent_wallet: payer,
     events_matched: stored.eventsMatched,
     ttl_timestamp: stored.ttlTimestamp.toISOString(),
+    report_url: reportUrlFor(stored.id, `${req.protocol}://${req.get("host")}`),
   });
 }

@@ -34,6 +34,7 @@ model Intent {
   matchedEvents      Json?        @map("matched_events")
   settlementTxHash   String?      @map("settlement_tx_hash")
   settledAmountAtomic String?     @map("settled_amount_atomic")
+  lifecycle          Json?        @map("lifecycle")
   createdAt          DateTime     @default(now()) @map("created_at")
   updatedAt          DateTime     @updatedAt @map("updated_at")
 

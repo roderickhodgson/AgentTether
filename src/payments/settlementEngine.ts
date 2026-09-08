@@ -45,8 +45,10 @@ import {
   markSettled,
   markSettleFailed,
   markTimeout,
+  appendLifecycle,
   type PersistedMatchedEvent,
 } from "../db.js";
+import { reportUrlFor } from "../api/report.js";
 import { facilitator, NETWORK, PAY_TO_ADDRESS, txExplorerUrl, voucherPermittedAmount } from "./facilitator.js";
 import { logger } from "../logger.js";
 
@@ -228,10 +230,11 @@ async function deliverWebhook(url: string, notice: WebhookNotice): Promise<void>
       const res = await fetch(url, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(notice),
+        body: JSON.stringify({ ...notice, report_url: reportUrlFor(notice.intent_id) }),
         signal: AbortSignal.timeout(10_000),
       });
       logger.info({ intent: notice.intent_id, status: res.status, attempt: i }, "webhook delivered");
+      await appendLifecycle(notice.intent_id, "delivered", { attempt: i, ok: true });
       return;
     } catch (e) {
       logger.warn(
@@ -242,6 +245,7 @@ async function deliverWebhook(url: string, notice: WebhookNotice): Promise<void>
     }
   }
   logger.error({ intent: notice.intent_id, url }, "webhook delivery exhausted retries — settlement stands, agent unreachable");
+  await appendLifecycle(notice.intent_id, "delivered", { ok: false, note: "unreachable after retries — settlement stands" });
 }
 
 // Shared rejection triage for both settlement paths:

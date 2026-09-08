@@ -17,7 +17,29 @@ export type CreateIntentInput = {
 
 export async function createIntent(input: CreateIntentInput) {
   return prisma.intent.create({
-    data: { ...input, status: "PENDING_PAYMENT" },
+    data: {
+      ...input,
+      status: "PENDING_PAYMENT",
+      lifecycle: [{ step: "requested", at: new Date().toISOString() }] as unknown as Prisma.InputJsonValue,
+    },
+  });
+}
+
+// Lifecycle append (the flow-chart data): one entry per transition. Safe under the
+// single-writer rule (read-modify-write, no CAS needed); capped so a chatty agent's
+// annotations can't balloon the row.
+export const MAX_LIFECYCLE_STEPS = 50;
+
+export type LifecycleStep = { step: string; at: string; detail?: Record<string, unknown> };
+
+export async function appendLifecycle(id: string, step: string, detail?: Record<string, unknown>) {
+  const entry: LifecycleStep = { step, at: new Date().toISOString(), ...(detail ? { detail } : {}) };
+  const row = await prisma.intent.findUnique({ where: { id }, select: { lifecycle: true } });
+  if (!row) return;
+  const prior = (Array.isArray(row.lifecycle) ? row.lifecycle : []) as LifecycleStep[];
+  await prisma.intent.update({
+    where: { id },
+    data: { lifecycle: [...prior, entry].slice(-MAX_LIFECYCLE_STEPS) as unknown as Prisma.InputJsonValue },
   });
 }
 
@@ -35,7 +57,7 @@ export async function storeVerifiedPayment(
   paymentPayload: Prisma.InputJsonValue,
   agentWallet?: string,
 ) {
-  return prisma.intent.update({
+  const res = await prisma.intent.update({
     where: { id },
     data: {
       paymentNonce,
@@ -44,6 +66,8 @@ export async function storeVerifiedPayment(
       ...(agentWallet ? { agentWallet } : {}),
     },
   });
+  await appendLifecycle(id, "paid", { payer: agentWallet, nonce: paymentNonce.slice(0, 10) + "…" });
+  return res;
 }
 
 export async function updateIntentStatus(id: string, status: IntentStatus) {
@@ -250,7 +274,8 @@ export async function getExpiredMonitoringIntents(now = new Date()) {
 // replay reaches its creation time). CAS on the null so concurrent blocks can't
 // double-set it.
 export async function setStartBlockNum(id: string, blockNum: number) {
-  await prisma.intent.updateMany({ where: { id, startBlockNum: null }, data: { startBlockNum: blockNum } });
+  const res = await prisma.intent.updateMany({ where: { id, startBlockNum: null }, data: { startBlockNum: blockNum } });
+  if (res.count === 1) await appendLifecycle(id, "window_opened", { start_block: blockNum });
 }
 
 // CAS claim (4.2's operational guard): exactly one concurrent invoker wins the
@@ -283,18 +308,22 @@ export async function claimStaleSettlement(id: string, staleMs: number = STALE_S
 }
 
 export async function markSettled(id: string, settlementTxHash: string, settledAmountAtomic: string) {
-  return prisma.intent.update({
+  const res = await prisma.intent.update({
     where: { id },
     data: { status: "SETTLED", settlementTxHash, settledAmountAtomic },
   });
+  await appendLifecycle(id, "settled", { tx: settlementTxHash, amount_charged_atomic: settledAmountAtomic });
+  return res;
 }
 
 export async function markSettleFailed(id: string) {
-  return prisma.intent.update({ where: { id }, data: { status: "SETTLE_FAILED" } });
+  const res = await prisma.intent.update({ where: { id }, data: { status: "SETTLE_FAILED" } });
+  await appendLifecycle(id, "settle_failed");
+  return res;
 }
 
 export async function markTimeout(id: string, settledAmountAtomic?: string, settlementTxHash?: string) {
-  return prisma.intent.update({
+  const res = await prisma.intent.update({
     where: { id },
     data: {
       status: "TIMEOUT",
@@ -302,6 +331,23 @@ export async function markTimeout(id: string, settledAmountAtomic?: string, sett
       ...(settlementTxHash ? { settlementTxHash } : {}),
     },
   });
+  await appendLifecycle(
+    id,
+    "expired",
+    settlementTxHash
+      ? { tx: settlementTxHash, amount_charged_atomic: settledAmountAtomic }
+      : { note: "no blocks processed — nothing charged" },
+  );
+  return res;
+}
+
+// Agent-side annotations (the flow-chart's optional LLM rows): length-capped, appended
+// with the `agent:` prefix so they can't collide with backend step names.
+export async function annotateIntent(id: string, step: string, detail?: Record<string, unknown>): Promise<boolean> {
+  const intent = await prisma.intent.findUnique({ where: { id }, select: { id: true } });
+  if (!intent) return false;
+  await appendLifecycle(id, `agent: ${step.slice(0, 40)}`, detail);
+  return true;
 }
 
 // 4.3 recovery set — three ways an intent can be owed settlement work:

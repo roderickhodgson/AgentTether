@@ -15,3 +15,7 @@ __pycache__/
 
 *.egg-info/
 agent/.langgraph_api/
+
+# Local Netlify folder
+.netlify
+deno.lock

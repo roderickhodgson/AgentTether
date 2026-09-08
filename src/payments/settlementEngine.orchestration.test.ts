@@ -26,6 +26,7 @@ vi.mock("../db.js", () => ({
   markSettled: vi.fn(),
   markSettleFailed: vi.fn(),
   markTimeout: vi.fn(),
+  appendLifecycle: vi.fn(),
 }));
 
 vi.mock("./facilitator.js", () => ({

@@ -11,7 +11,7 @@
 import type { Express, Request, Response } from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { prisma } from "../db.js";
+import { annotateIntent, prisma } from "../db.js";
 import { logger } from "../logger.js";
 import { NETWORK, USDC_ADDRESS } from "../payments/facilitator.js";
 
@@ -55,6 +55,7 @@ export type IntentReport = {
     per_block_rate_atomic: string;
     max_limit_atomic: string;
   };
+  lifecycle: Array<{ step: string; at: string; detail?: Record<string, unknown> }>;
   matched: {
     count: number;
     stored: number;
@@ -89,6 +90,7 @@ export function buildReport(intent: {
   maxLimitAtomic: string;
   eventsMatched: number;
   matchedEvents: unknown;
+  lifecycle?: unknown;
   settlementTxHash: string | null;
   settledAmountAtomic: string | null;
 }): IntentReport {
@@ -132,6 +134,7 @@ export function buildReport(intent: {
       per_block_rate_atomic: intent.perBlockRateAtomic,
       max_limit_atomic: intent.maxLimitAtomic,
     },
+    lifecycle: (Array.isArray(intent.lifecycle) ? intent.lifecycle : []) as IntentReport["lifecycle"],
     matched: {
       count: intent.eventsMatched,
       stored: events.length,
@@ -143,7 +146,79 @@ export function buildReport(intent: {
   };
 }
 
+// The public base for report links handed to agents (202 bodies, webhook notices).
+// PUBLIC_BASE_URL covers tunnels/hosted deployments; same-origin handlers pass their
+// own base from the request.
+export function publicBaseUrl(): string {
+  if (process.env.PUBLIC_BASE_URL) return process.env.PUBLIC_BASE_URL.replace(/\/$/, "");
+  return `http://localhost:${process.env.PORT ?? 8080}`;
+}
+
+export function reportUrlFor(id: string, base: string = publicBaseUrl()): string {
+  return `${base.replace(/\/$/, "")}/w/${id}`;
+}
+
+// Public, wallet-free summary rows for the home page's "recent requests" list.
+// RECENT_INTENTS_LIMIT is the default count (.env), the query param caps at 20.
+function recentLimit(queryLimit: string | undefined): number {
+  const configured = Number(process.env.RECENT_INTENTS_LIMIT ?? 5);
+  const requested = Number(queryLimit ?? configured);
+  return Math.min(20, Math.max(1, Number.isFinite(requested) ? Math.floor(requested) : configured));
+}
+
 export function mountReport(app: Express): void {
+  app.get("/api/v1/intents/recent", async (req: Request, res: Response) => {
+    res.set("Access-Control-Allow-Origin", "*");
+    const rows = await prisma.intent.findMany({
+      orderBy: { createdAt: "desc" },
+      take: recentLimit(req.query.limit as string | undefined),
+      select: {
+        id: true,
+        status: true,
+        targetContract: true,
+        eventCondition: true,
+        createdAt: true,
+        ttlTimestamp: true,
+        settlementTxHash: true,
+        settledAmountAtomic: true,
+        eventsMatched: true,
+      },
+    });
+    res.json({
+      requests: rows.map((r) => ({
+        id: r.id,
+        status: r.status,
+        asset: assetName(r.targetContract),
+        min_amount_atomic: (r.eventCondition as { minAmount?: string } | null)?.minAmount ?? "0",
+        created_at: r.createdAt.toISOString(),
+        events_matched: r.eventsMatched,
+        settled: r.settlementTxHash != null,
+        report_url: reportUrlFor(r.id),
+      })),
+    });
+  });
+
+  // Optional agent annotations (the flow-chart's LLM rows): unauthenticated, append-only,
+  // length-capped; stored with an `agent:` prefix so they can't spoof backend steps.
+  app.post("/api/v1/intents/:id/annotate", async (req: Request, res: Response) => {
+    res.set("Access-Control-Allow-Origin", "*");
+    res.set("Access-Control-Allow-Headers", "content-type");
+    const id = String(req.params.id);
+    const body = (req.body ?? {}) as { step?: unknown; detail?: unknown };
+    const step = typeof body.step === "string" ? body.step.trim() : "";
+    if (!step) {
+      res.status(400).json({ error: "step (string) is required" });
+      return;
+    }
+    if (body.detail !== undefined && (typeof body.detail !== "object" || body.detail === null)) {
+      res.status(400).json({ error: "detail must be an object" });
+      return;
+    }
+    const detail = JSON.parse(JSON.stringify(body.detail ?? {})) as Record<string, unknown>;
+    const ok = await annotateIntent(id, step.slice(0, 200), detail);
+    res.status(ok ? 200 : 404).json(ok ? { ok: true } : { error: "unknown intent" });
+  });
+
   app.get("/api/v1/intents/:id/report", async (req: Request, res: Response) => {
     res.set("Access-Control-Allow-Origin", "*"); // hosted static pages fetch this
     try {
@@ -166,4 +241,12 @@ export function mountReport(app: Express): void {
       if (err) res.status(500).send("report page missing (web/report.html)");
     });
   });
+
+  app.get("/", (_req: Request, res: Response) => {
+    const page = path.join(path.dirname(fileURLToPath(import.meta.url)), "../../web/index.html");
+    res.sendFile(page, (err) => {
+      if (err) res.send("AgentTether API — see /w/:id for watch reports");
+    });
+  });
+  logger.info("results pages mounted: / (recent) · /w/:id (+ JSON report, annotate, recent)");
 }
