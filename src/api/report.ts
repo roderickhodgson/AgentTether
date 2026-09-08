@@ -8,9 +8,7 @@
  * The report is PRESENTATION-shaped: the DB's bare-hex webhook convention is
  * converted to canonical 0x form here (the report is a new consumer, not the webhook).
  */
-import express, { type Express, Request, Response } from "express";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import type { Express, Request, Response } from "express";
 import { annotateIntent, prisma } from "../db.js";
 import { logger } from "../logger.js";
 import { NETWORK, USDC_ADDRESS } from "../payments/facilitator.js";
@@ -146,16 +144,16 @@ export function buildReport(intent: {
   };
 }
 
-// The public base for report links handed to agents (202 bodies, webhook notices).
-// PUBLIC_BASE_URL covers tunnels/hosted deployments; same-origin handlers pass their
-// own base from the request.
+// The SITE base for report links handed to agents (202 bodies, webhook notices, the
+// recent list). PUBLIC_SITE_URL is the hosted tier (Netlify / an https domain) — the
+// default documents the local dev site (`netlify dev` on :8888). The backend serves
+// NO HTML: it is API-only; the pages live on the web tier.
 export function publicBaseUrl(): string {
-  if (process.env.PUBLIC_BASE_URL) return process.env.PUBLIC_BASE_URL.replace(/\/$/, "");
-  return `http://localhost:${process.env.PORT ?? 8080}`;
+  return (process.env.PUBLIC_SITE_URL ?? "http://localhost:8888").replace(/\/$/, "");
 }
 
-export function reportUrlFor(id: string, base: string = publicBaseUrl()): string {
-  return `${base.replace(/\/$/, "")}/w/${id}`;
+export function reportUrlFor(id: string, _base?: string): string {
+  return `${publicBaseUrl()}/w/${id}`;
 }
 
 // Public, wallet-free summary rows for the home page's "recent requests" list.
@@ -235,15 +233,16 @@ export function mountReport(app: Express): void {
     }
   });
 
-  app.get("/w/:id", async (req: Request, res: Response) => {
-    const page = path.join(path.dirname(fileURLToPath(import.meta.url)), "../../web/report.html");
-    res.sendFile(page, (err) => {
-      if (err) res.status(500).send("report page missing (web/report.html)");
+  // CORS preflight — required for the HOSTED pages (https Netlify site → https API):
+  // without a 204 OPTIONS response the browser blocks the POST annotate call entirely.
+  app.options("/api/v1/intents/:id/annotate", (_req: Request, res: Response) => {
+    res.set({
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "content-type",
     });
+    res.sendStatus(204);
   });
 
-  // The static pages themselves (/, /report.html) — same origin as the API, so the
-  // locally-served demo needs no ?api= override.
-  app.use(express.static(path.join(path.dirname(fileURLToPath(import.meta.url)), "../../web")));
-  logger.info("results pages mounted: / (recent) · /w/:id (+ JSON report, annotate, recent)");
+  logger.info("public API mounted: report JSON · recent · annotate (HTML lives on the web tier)");
 }

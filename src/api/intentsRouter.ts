@@ -203,7 +203,7 @@ async function verifySignedPayment(req: Request, res: Response, signature: strin
         job_id: existing.id,
         status: existing.status,
         idempotent: true,
-        report_url: reportUrlFor(existing.id, `${req.protocol}://${req.get("host")}`),
+        report_url: reportUrlFor(existing.id),
       });
       return;
     }
@@ -294,6 +294,6 @@ async function verifySignedPayment(req: Request, res: Response, signature: strin
     agent_wallet: payer,
     events_matched: stored.eventsMatched,
     ttl_timestamp: stored.ttlTimestamp.toISOString(),
-    report_url: reportUrlFor(stored.id, `${req.protocol}://${req.get("host")}`),
+    report_url: reportUrlFor(stored.id),
   });
 }

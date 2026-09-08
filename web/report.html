@@ -52,10 +52,12 @@
   <div id="content"></div>
   <div class="foot" id="disclosure"></div>
 </main>
+<script src="config.js"></script>
 <script>
 const params = new URLSearchParams(location.search);
 const id = params.get("i") || location.pathname.split("/").filter(Boolean).pop();
-const api = params.get("api") || location.origin; // same origin when served by the backend at /w/:id
+// api base chain: ?api= → config.js → same origin
+const api = params.get("api") || window.AGENTTETHER_API || location.origin;
 
 const fmt = (atomic) => {
   const n = Number(atomic);
