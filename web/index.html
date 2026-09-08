@@ -85,7 +85,7 @@ const fmt = (atomic) => {
       return;
     }
     document.getElementById("recent").innerHTML = requests.map(r => `
-      <a class="req" href="report.html?i=${r.id}${api !== location.origin ? "&api=" + encodeURIComponent(api) : ""}">
+      <a class="req" href="/report?i=${r.id}${api !== location.origin ? "&api=" + encodeURIComponent(api) : ""}">
         <span class="l">
           <span class="a">${r.asset} — fires on transfers ≥ ${fmt(r.min_amount_atomic)}</span>
           <span class="m">${new Date(r.created_at).toLocaleString()} · ${r.events_matched} event(s)${r.settled ? " · settled on-chain" : ""}</span>

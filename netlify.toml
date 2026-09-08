@@ -9,6 +9,11 @@
   publish = "web"
 
 [[redirects]]
+  from = "/report"
+  to = "/report.html"
+  status = 200
+
+[[redirects]]
   from = "/w/:id"
   to = "/report.html?i=:id"
   status = 200
