@@ -164,7 +164,7 @@ export function reportUrlFor(id: string, _base?: string): string {
   return `${publicBaseUrl()}/w/${id}`;
 }
 
-// Public, wallet-free summary rows for the home page's "recent requests" list.
+// Public summary rows for the home page's "recent requests" list.
 // RECENT_INTENTS_LIMIT is the default count (.env), the query param caps at 20.
 function recentLimit(queryLimit: string | undefined): number {
   const configured = Number(process.env.RECENT_INTENTS_LIMIT ?? 5);
