@@ -44,6 +44,20 @@ def test_stream_body_shape_never_carries_pricing():
     assert "rate_per_event_atomic" not in body and "max_limit_atomic" not in body
 
 
+def test_stream_body_wallet_watch_omits_absent_selectors():
+    client = StreamClient(FakeSession([]), "http://x:8080")
+    wallet = client.build_body(None, None, 60, None, "watch whale", watch_wallet="0xW", direction="incoming")
+    assert wallet == {
+        "query_intent": "watch whale",
+        "watch_wallet": "0xW",
+        "direction": "incoming",
+        "event_condition": {},
+        "ttl_seconds": 60,
+    }
+    both = client.build_body("0xusdc", None, 60, None, "q", watch_wallet="0xW")
+    assert both["target_contract"] == "0xusdc" and both["watch_wallet"] == "0xW" and "direction" not in both and both["event_condition"] == {}
+
+
 def test_create_intent_returns_job_id_on_202():
     session = FakeSession([FakeResponse(202, {"job_id": "j-1", "status": "MONITORING", "agent_wallet": "0xw"})])
     client = StreamClient(session, "http://x:8080")

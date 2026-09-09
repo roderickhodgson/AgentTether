@@ -60,14 +60,19 @@ class ScriptedLlm:
 
     def complete(self, system: str, prompt: str) -> str:
         if '"kind": "plan"' in prompt:
-            return json.dumps(
-                {
-                    "target_contract": _extract(prompt, "target_contract"),
-                    "min_amount_atomic": _extract(prompt, "min_amount_atomic"),
-                    "ttl_seconds": int(_extract(prompt, "ttl_seconds") or 60),
-                    "query_intent": "scripted watch",
-                }
-            )
+            plan = {
+                "target_contract": _extract(prompt, "target_contract"),
+                "min_amount_atomic": _extract(prompt, "min_amount_atomic"),
+                "ttl_seconds": int(_extract(prompt, "ttl_seconds") or 60),
+                "query_intent": "scripted watch",
+            }
+            wallet = _extract(prompt, "watch_wallet")
+            if wallet:
+                plan["watch_wallet"] = wallet
+                direction = _extract(prompt, "direction")
+                if direction:
+                    plan["direction"] = direction
+            return json.dumps(plan)
         if '"kind": "decide"' in prompt:
             budget = int(_extract(prompt, "reissue_budget") or 0)
             used = int(_extract(prompt, "reissues_used") or 0)

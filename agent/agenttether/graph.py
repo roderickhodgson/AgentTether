@@ -40,19 +40,29 @@ def asset_name(contract: str | None) -> str:
     return KNOWN_ASSETS.get((contract or "").lower()) or (contract or "unknown contract")
 
 
+def subject(watch: dict[str, Any]) -> str:
+    """What the watch is pointed at, in words — asset-only or wallet (+direction)."""
+    asset = asset_name(watch.get("target_contract"))
+    wallet = watch.get("watch_wallet")
+    if wallet:
+        base = f"wallet {wallet} ({watch.get('direction') or 'any'})"
+        return f"{base} on {asset}" if watch.get("target_contract") else f"{base}, any token"
+    return asset
+
+
 def factual_summary(state: AgentState) -> str:
     notice = state.get("notice") or {}
     events = notice.get("events") or []
-    asset = asset_name(state.get("watch", {}).get("target_contract"))
+    watched = subject(state.get("watch", {}))
     if events:
         head = (
-            f"Watched {asset} for transfers; the window delivered "
+            f"Watched {watched} for transfers; the window delivered "
             f"{notice.get('events_matched', len(events))} matching events; settlement "
             f"charged {notice.get('amount_charged_atomic', '?')} atomic."
         )
     elif notice.get("tx_hash"):
         head = (
-            f"Watched {asset} for transfers; the window expired without a match; the "
+            f"Watched {watched} for transfers; the window expired without a match; the "
             f"idle watch was charged {notice.get('amount_charged_atomic', '?')} atomic "
             f"(its full block budget)."
         )
@@ -60,7 +70,7 @@ def factual_summary(state: AgentState) -> str:
         # No tx, no amount: the sweep's zero-processed-blocks timeout — the window
         # never opened (the stream processed nothing in-window), so nothing was billed.
         head = (
-            f"Watched {asset} for transfers; the window expired with no blocks "
+            f"Watched {watched} for transfers; the window expired with no blocks "
             f"processed — NOTHING was charged (the watch never opened)."
         )
     if notice.get("synthetic"):
@@ -89,9 +99,12 @@ class AgentState(TypedDict):
 
 PLAN_SYSTEM = (
     "You are an autonomous agent that buys blockchain event watches with x402 payments. "
-    'Reply with ONLY a JSON object: {"target_contract": "<0x address>", '
-    '"min_amount_atomic": "<atomic-unit string>", "ttl_seconds": <60..86400>, '
-    '"query_intent": "<short description>"}. No prose, no markdown.'
+    'Reply with ONLY a JSON object: {"target_contract": "<0x address, or omit when only '
+    'watching a wallet>", "watch_wallet": "<0x address, optional — watch a specific wallet>", '
+    '"direction": "<incoming|outgoing|any — only with watch_wallet>", '
+    '"min_amount_atomic": "<atomic-unit string, optional — omit for any transfer>", '
+    '"ttl_seconds": <60..86400>, "query_intent": "<short description>"}. '
+    "No prose, no markdown."
 )
 OBSERVE_SYSTEM = (
     "You are an autonomous agent reporting on a blockchain event watch you purchased. "
@@ -142,11 +155,13 @@ def build_graph(
     def negotiate(state: AgentState) -> dict[str, Any]:
         watch = state["watch"]
         job = stream.create_intent(
-            target_contract=watch["target_contract"],
-            min_amount_atomic=str(watch["min_amount_atomic"]),
+            target_contract=watch.get("target_contract"),
+            min_amount_atomic=str(watch["min_amount_atomic"]) if watch.get("min_amount_atomic") else None,
             ttl_seconds=int(watch["ttl_seconds"]),
             webhook_url=webhook_url,
             query_intent=str(watch.get("query_intent", "agent watch")),
+            watch_wallet=watch.get("watch_wallet"),
+            direction=watch.get("direction"),
         )
         quoted = None
         if quote_source is not None:
@@ -172,9 +187,9 @@ def build_graph(
     # ── observe (LLM): narrate the delivery + disclosure ────────────────────
     def observe(state: AgentState) -> dict[str, Any]:
         notice = state.get("notice") or {}
-        asset = asset_name(state.get("watch", {}).get("target_contract"))
+        watched = subject(state.get("watch", {}))
         guidance = (
-            f"- asset: {asset}\n"
+            f"- watched: {watched}\n"
             "- notice with events: report how many arrived and the charged amount\n"
             "- notice with a tx but no events: the window expired idle and its full block budget was charged\n"
             "- notice with no tx: the window never opened (no blocks processed) and NOTHING was charged\n"

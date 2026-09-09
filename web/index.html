@@ -50,6 +50,9 @@
 for any transfer ≥ 1,000 USDC for the next 60 seconds. Pay for it yourself with x402
 (the first run does a one-time Permit2 approval — handled automatically by the agent),
 then report what arrived."</pre>
+  <pre>"Using the AgentTether API at http://localhost:8080, watch the wallet
+0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045 for any incoming USDC transfer for the
+next 60 seconds. Pay for it yourself with x402, then report what arrived."</pre>
   <p>The 202 response carries a <code>report_url</code> back to your agent — that's a
   link into this site's flow-chart rendering of the whole process.</p>
 
@@ -75,6 +78,10 @@ const fmt = (atomic) => {
   const n = Number(atomic);
   return Number.isFinite(n) ? `${n.toLocaleString()} atomic${n >= 1e6 ? ` (≈ ${(n / 1e6).toLocaleString()} USDC)` : ""}` : atomic;
 };
+const short = (h) => h ? `${h.slice(0, 10)}…${h.slice(-6)}` : "—";
+const subject = (r) => r.watch_wallet
+  ? `watching ${short(r.watch_wallet)} · ${r.direction ?? "any"}${r.asset ? ` — ${r.asset}` : " — any token"}`
+  : `${r.asset} — fires on transfers ≥ ${fmt(r.min_amount_atomic)}`;
 
 (async () => {
   try {
@@ -88,7 +95,7 @@ const fmt = (atomic) => {
     document.getElementById("recent").innerHTML = requests.map(r => `
       <a class="req" href="/report?i=${r.id}${api !== location.origin ? "&api=" + encodeURIComponent(api) : ""}">
         <span class="l">
-          <span class="a">${r.asset} — fires on transfers ≥ ${fmt(r.min_amount_atomic)}</span>
+          <span class="a">${subject(r)}</span>
           <span class="m">${new Date(r.created_at).toLocaleString()} · ${r.events_matched} event(s)${r.settled ? " · settled on-chain" : ""}</span>
         </span>
         <span class="badge ${r.status}">${r.status}</span>

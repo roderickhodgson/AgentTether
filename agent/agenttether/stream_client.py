@@ -25,35 +25,49 @@ class StreamClient:
 
     def build_body(
         self,
-        target_contract: str,
-        min_amount_atomic: str,
+        target_contract: str | None,
+        min_amount_atomic: str | None,
         ttl_seconds: int,
         webhook_url: str | None,
         query_intent: str,
+        watch_wallet: str | None = None,
+        direction: str | None = None,
     ) -> dict[str, Any]:
-        return {
-            "query_intent": query_intent,
-            "target_contract": target_contract,
-            "event_condition": {"minAmount": min_amount_atomic},
-            "ttl_seconds": ttl_seconds,
-            **({"webhook_url": webhook_url} if webhook_url else {}),
-        }
+        body: dict[str, Any] = {"query_intent": query_intent}
+        if target_contract:
+            body["target_contract"] = target_contract
+        if watch_wallet:
+            body["watch_wallet"] = watch_wallet
+        if direction:
+            body["direction"] = direction
+        body["event_condition"] = {"minAmount": min_amount_atomic} if min_amount_atomic else {}
+        body["ttl_seconds"] = ttl_seconds
+        if webhook_url:
+            body["webhook_url"] = webhook_url
+        return body
 
     def create_intent(
         self,
-        target_contract: str,
-        min_amount_atomic: str,
+        target_contract: str | None,
+        min_amount_atomic: str | None,
         ttl_seconds: int,
         webhook_url: str | None = None,
         query_intent: str = "agent watch",
+        watch_wallet: str | None = None,
+        direction: str | None = None,
     ) -> dict[str, Any]:
         """Create the intent; 402→voucher→202 happens inside the wrapped session.
 
         Returns the 202 payload: {job_id, status, agent_wallet, ...}.
+        A wallet watch (watch_wallet + optional direction/target_contract) replaces
+        the asset-only form; min_amount_atomic=None means any transfer.
         """
         res = self.session.post(
             f"{self.server_url}{STREAM_PATH}",
-            json=self.build_body(target_contract, min_amount_atomic, ttl_seconds, webhook_url, query_intent),
+            json=self.build_body(
+                target_contract, min_amount_atomic, ttl_seconds, webhook_url, query_intent,
+                watch_wallet=watch_wallet, direction=direction,
+            ),
             timeout=120,
         )
         if res.status_code != 202:

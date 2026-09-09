@@ -91,7 +91,12 @@ def main() -> None:
     w = paused.get("watch", {})
     min_atomic = int(str(w.get("min_amount_atomic", "0") or 0))
     usdc = f" (≈ {min_atomic / 1e6:,.0f} USDC)" if min_atomic and min_atomic % 1_000_000 == 0 else ""
-    print(f"plan: watch {w.get('target_contract')} for transfers ≥ {min_atomic:,} atomic{usdc}, ttl {w.get('ttl_seconds')}s — \"{w.get('query_intent')}\"")
+    gate = f"transfers ≥ {min_atomic:,} atomic{usdc}" if min_atomic else "any transfer"
+    if w.get("watch_wallet"):
+        asset = f" on {w.get('target_contract')}" if w.get("target_contract") else " (any token)"
+        print(f"plan: watch wallet {w.get('watch_wallet')} ({w.get('direction') or 'any'}){asset} for {gate}, ttl {w.get('ttl_seconds')}s — \"{w.get('query_intent')}\"")
+    else:
+        print(f"plan: watch {w.get('target_contract')} for {gate}, ttl {w.get('ttl_seconds')}s — \"{w.get('query_intent')}\"")
     print(f"negotiated: job {job_id} · quoted ceiling {paused.get('quoted_ceiling')} atomic")
     print("⏸  PAUSED — agent asleep on wait_for_webhook (zero compute)…")
     arm_watchdog(int(paused.get("watch", {}).get("ttl_seconds", 60)) + 180)

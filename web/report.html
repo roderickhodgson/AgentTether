@@ -124,11 +124,17 @@ function stepperHtml(lifecycle) {
     const i = r.intent, m = r.matched, s = r.settlement;
 
     document.getElementById("sub").textContent = `intent ${i.id}`;
+    const watching = i.watch_wallet
+      ? `watching ${short(i.watch_wallet)} · ${i.direction ?? "any"}` + (i.asset ? ` — ${i.asset}` : " — any token")
+      : (i.asset ?? "any token");
+    const gate = i.min_amount_atomic === "0"
+      ? row("fires on", "any transfer")
+      : row("fires on transfers ≥", fmt(i.min_amount_atomic));
     const head = `
       <div class="card">
         <div class="row"><span class="k">status</span><span class="badge ${i.status}">${i.status}</span></div>
-        ${row("asset watched", i.asset)}
-        ${row("fires on transfers ≥", fmt(i.min_amount_atomic))}
+        ${row("asset watched", watching)}
+        ${gate}
         ${row("window", `${new Date(i.created_at).toLocaleString()} → ${new Date(i.expires_at).toLocaleString()}`)}
         ${row("budget", `${i.budget_blocks} blocks × ${i.per_block_rate_atomic} atomic — ceiling ${fmt(i.max_limit_atomic)}`)}
       </div>`;
