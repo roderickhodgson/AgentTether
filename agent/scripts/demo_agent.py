@@ -17,6 +17,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import threading
 import time
 
@@ -35,7 +36,13 @@ def main() -> None:
         default="Watch for any USDC transfer of at least 1 USDC on Ethereum mainnet and tell me what happens.",
     )
     parser.add_argument("--reissues", type=int, default=1, help="how many times the agent may buy another window")
+    parser.add_argument(
+        "--watch-json",
+        default=None,
+        help='override the default watch plan, e.g. \'{"watch_wallet": "0x…", "direction": "incoming", "ttl_seconds": 120}\'',
+    )
     args = parser.parse_args()
+    override = json.loads(args.watch_json) if args.watch_json else None
 
     cfg = load_config()
     server = WebhookServer(cfg)
@@ -44,7 +51,7 @@ def main() -> None:
     print(f"agent payer: {cfg.wallet} · LLM: {cfg.llm_provider}")
     print(f"webhook receiver: {server.url()}")
 
-    stack = DemoStack(webhook_url=server.url())
+    stack = DemoStack(webhook_url=server.url(), default_watch=override)
     thread = {"configurable": {"thread_id": f"agent-{int(time.time())}"}}
 
     done = threading.Event()
