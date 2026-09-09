@@ -110,7 +110,6 @@ export function buildReport(intent: {
     (intent.eventCondition as { minAmount?: string } | null)?.minAmount ?? "0";
 
   const settled = intent.settlementTxHash != null;
-  const zeroBlocks = !settled && intent.status === "TIMEOUT";
   const settlement = {
     tx_hash: intent.settlementTxHash ? hex0x(intent.settlementTxHash) : null,
     amount_charged_atomic: intent.settledAmountAtomic,
@@ -119,9 +118,11 @@ export function buildReport(intent: {
       : null,
     note: settled
       ? "Settled on-chain after the settlement receipt confirmed (fail-closed delivery)."
-      : zeroBlocks
+      : intent.status === "TIMEOUT"
         ? "The window expired with no blocks processed — nothing was charged (the watch never opened)."
-        : "No on-chain settlement yet.",
+        : intent.status === "EXPIRED"
+          ? "The offer expired unpaid — nothing was charged."
+          : "No on-chain settlement yet.",
   };
 
   return {

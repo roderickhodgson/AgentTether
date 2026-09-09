@@ -353,6 +353,22 @@ export async function annotateIntent(id: string, step: string, detail?: Record<s
   return true;
 }
 
+// Public-surface hygiene: an unpaid intent is a TIME-BOUND OFFER — its quote (and its
+// Permit2 maxTimeoutSeconds) was computed for this ttl, and the verify phase only
+// accepts PENDING_PAYMENT, so an offer whose ttl has passed can neither be honored nor
+// paid meaningfully. The sweeps only ever timed out MONITORING, so spam-created
+// PENDING_PAYMENT rows accumulated forever; this cancels them in one bulk update (no
+// per-row lifecycle appends — the point is to be cheap against floods). The tiny race
+// with a verify landing between the sweep and the answer is benign: the client gets a
+// 404 and re-creates the intent; the voucher is never settled.
+export async function expireStalePendingPayments(now = new Date()): Promise<number> {
+  const res = await prisma.intent.updateMany({
+    where: { status: "PENDING_PAYMENT", ttlTimestamp: { lt: now } },
+    data: { status: "EXPIRED" },
+  });
+  return res.count;
+}
+
 // 4.3 recovery set — three ways an intent can be owed settlement work:
 //  - MONITORING past TTL → timeout settlement (the cron's bread and butter)
 //  - MONITORING with metered events → engine trigger lost to a crash between the atomic

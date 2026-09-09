@@ -10,13 +10,15 @@
  */
 import cron from "node-cron";
 import { runSettlementSweep } from "./payments/settlementEngine.js";
-import { pruneProcessedTransfers } from "./db.js";
+import { expireStalePendingPayments, pruneProcessedTransfers } from "./db.js";
 import { oneshotRetentionHours } from "./payments/pricing.js";
 import { logger } from "./logger.js";
 
 async function maintenancePass(): Promise<void> {
   const pruned = await pruneProcessedTransfers(oneshotRetentionHours());
   if (pruned > 0) logger.info({ pruned }, "capture retention prune");
+  const expired = await expireStalePendingPayments();
+  if (expired > 0) logger.info({ expired }, "stale unpaid offers expired (PENDING_PAYMENT → EXPIRED)");
 }
 
 export async function startSettlementSweeps(): Promise<void> {

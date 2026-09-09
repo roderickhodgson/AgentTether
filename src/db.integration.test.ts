@@ -209,6 +209,38 @@ d("db integration — getSettlementCandidates (the recovery set)", () => {
   });
 });
 
+d("db integration — stale unpaid offers (EXPIRED)", () => {
+  async function unpaidIntent(ttlTimestamp: Date) {
+    return db.createIntent({
+      agentWallet: AGENT,
+      targetContract: "0x00000000000000000000000000000000000000aa",
+      ttlTimestamp,
+      maxLimitAtomic: "1000000",
+      perBlockRateAtomic: "10",
+      budgetBlocks: 100000,
+      eventCondition: { minAmount: "1" },
+    });
+  }
+
+  it("expires PENDING_PAYMENT whose ttl passed; live offers and MONITORING are untouched", async () => {
+    const stale = await unpaidIntent(new Date(Date.now() - 1000));
+    const live = await unpaidIntent(new Date(Date.now() + 600_000));
+    const monitoringPastTtl = await seedIntent({ ttlTimestamp: new Date(Date.now() - 1000), eventsMatched: 0 });
+
+    expect(await db.expireStalePendingPayments()).toBeGreaterThanOrEqual(1);
+
+    expect((await db.prisma.intent.findUniqueOrThrow({ where: { id: stale.id } })).status).toBe("EXPIRED");
+    expect((await db.prisma.intent.findUniqueOrThrow({ where: { id: live.id } })).status).toBe("PENDING_PAYMENT");
+    // MONITORING past ttl belongs to the settlement sweep, never to this cancel
+    expect((await db.prisma.intent.findUniqueOrThrow({ where: { id: monitoringPastTtl.id } })).status).toBe("MONITORING");
+    expect((await db.prisma.intent.findUniqueOrThrow({ where: { id: monitoringPastTtl.id } })).ttlTimestamp < new Date()).toBe(true);
+
+    // an EXPIRED offer is inert: never in the recovery set
+    const candidates = await db.getSettlementCandidates();
+    expect(candidates.map((c) => c.id)).not.toContain(stale.id);
+  });
+});
+
 d("db integration — oneshot capture + lookback (3.4)", () => {
   const cap = (blockNum: number, logIndex: number, over: Partial<CaptureTransferInput> = {}): CaptureTransferInput => ({
     chain: "ethereum-mainnet",
