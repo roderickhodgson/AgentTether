@@ -10,6 +10,9 @@ import { isLeaseHeldError, releaseLease } from "./lease.js";
 import { startSettlementSweeps } from "./cron.js";
 
 const app = express();
+// Caddy terminates TLS on the same box and forwards via X-Forwarded-For — only trust
+// that header from loopback peers, so the rate limiters key on the real client IP.
+app.set("trust proxy", "loopback");
 app.use(express.json());
 // Order matters: the intents router (including the middleware-bypassing /stream route)
 // answers before the oneshot payment middleware sees the request; the oneshot handler

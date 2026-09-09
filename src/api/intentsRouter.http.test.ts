@@ -16,6 +16,12 @@ import * as facilitator from "../payments/facilitator.js";
 const AGENT = "0xf2fda1c0176801d009fa64aaee a2bca54a8d31c2".replace(" ", "");
 const FACILITATOR_ADDRESS = "0xd407e409e34e0b9afb99ecceb609bdbcd5e7f1bf";
 
+// Hoisted above the imports: the write limiter singleton is built at import time from
+// env — keep this suite's ~15 POSTs far below any real limit (429 tested separately).
+vi.hoisted(() => {
+  process.env.RATE_LIMIT_WRITES_PER_MIN = "100000";
+});
+
 // Mutable module state the mock factories close over (vi.hoisted keeps it above the
 // hoisted vi.mock calls). Tests vary PAY_TO_ADDRESS via the live-binding getter.
 const state = vi.hoisted(() => ({

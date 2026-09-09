@@ -12,6 +12,7 @@ import type { Express, Request, Response } from "express";
 import { annotateIntent, prisma } from "../db.js";
 import { logger } from "../logger.js";
 import { NETWORK, USDC_ADDRESS } from "../payments/facilitator.js";
+import { readRateLimiter, writeRateLimiter } from "./rateLimit.js";
 
 const DISCLOSURE =
   "The observed data and the payment rail are on different chains by design: events " +
@@ -171,7 +172,7 @@ function recentLimit(queryLimit: string | undefined): number {
 }
 
 export function mountReport(app: Express): void {
-  app.get("/api/v1/intents/recent", async (req: Request, res: Response) => {
+  app.get("/api/v1/intents/recent", readRateLimiter, async (req: Request, res: Response) => {
     res.set("Access-Control-Allow-Origin", "*");
     const rows = await prisma.intent.findMany({
       orderBy: { createdAt: "desc" },
@@ -208,7 +209,7 @@ export function mountReport(app: Express): void {
 
   // Optional agent annotations (the flow-chart's LLM rows): unauthenticated, append-only,
   // length-capped; stored with an `agent:` prefix so they can't spoof backend steps.
-  app.post("/api/v1/intents/:id/annotate", async (req: Request, res: Response) => {
+  app.post("/api/v1/intents/:id/annotate", writeRateLimiter, async (req: Request, res: Response) => {
     res.set("Access-Control-Allow-Origin", "*");
     res.set("Access-Control-Allow-Headers", "content-type");
     const id = String(req.params.id);
@@ -227,7 +228,7 @@ export function mountReport(app: Express): void {
     res.status(ok ? 200 : 404).json(ok ? { ok: true } : { error: "unknown intent" });
   });
 
-  app.get("/api/v1/intents/:id/report", async (req: Request, res: Response) => {
+  app.get("/api/v1/intents/:id/report", readRateLimiter, async (req: Request, res: Response) => {
     res.set("Access-Control-Allow-Origin", "*"); // hosted static pages fetch this
     try {
       const id = String(req.params.id); // express 5 types params as string | string[]

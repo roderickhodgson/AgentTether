@@ -20,6 +20,7 @@ import type { Request, Response } from "express";
 import { createIntent, getIntent, getIntentByPaymentNonce, storeVerifiedPayment } from "../db.js";
 import { discoverUpto, facilitator, NETWORK, USDC_ADDRESS, PAY_TO_ADDRESS, voucherPermittedAmount } from "../payments/facilitator.js";
 import { reportUrlFor } from "./report.js";
+import { writeRateLimiter } from "./rateLimit.js";
 import { quoteWindow, perBlockRateAtomic, blockTimeSeconds } from "../payments/pricing.js";
 import { logger } from "../logger.js";
 
@@ -108,7 +109,7 @@ export function advertisedMaxTimeoutSeconds(ttlSeconds: number): number {
 
 export const intentsRouter = Router();
 
-intentsRouter.post("/api/v1/intents/stream", async (req: Request, res: Response) => {
+intentsRouter.post("/api/v1/intents/stream", writeRateLimiter, async (req: Request, res: Response) => {
   if (!PAY_TO_ADDRESS) {
     res.status(503).json({ error: "PAY_TO_ADDRESS is not configured in .env (payment receiver wallet)" });
     return;
