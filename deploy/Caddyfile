@@ -1,0 +1,15 @@
+# Caddy front for the AgentTether backend: auto-TLS (ACME), reverse-proxy to the
+# loopback-only node process. See deploy/README.md §2a.
+#
+#   sudo apt install caddy
+#   sudo cp deploy/Caddyfile /etc/caddy/Caddyfile && sudo systemctl reload caddy
+#
+# Ports 80/443 must be reachable in the security group (ACME HTTP-01 + TLS-ALPN);
+# :8080 stays private (Caddy talks to it over loopback). The express app sets
+# `trust proxy = loopback`, so the rate limiters key on the real client IP from
+# Caddy's X-Forwarded-For.
+api.agenttether.cc {
+	# HSTS — api subdomain only (the apex/www live on Netlify; no includeSubDomains)
+	header Strict-Transport-Security "max-age=31536000"
+	reverse_proxy localhost:8080
+}

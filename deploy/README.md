@@ -125,14 +125,17 @@ The Netlify pages are `https` — browsers block them from fetching a plain-`htt
 **a) Real domain (primary, once you have DNS):** point an A record at the EC2 IP and
 put Caddy in front (auto-TLS, no cert ceremony):
 
+```bash
+sudo apt install caddy
+sudo cp deploy/Caddyfile /etc/caddy/Caddyfile && sudo systemctl reload caddy
 ```
-# /etc/caddy/Caddyfile
-api.your-domain.xyz {
-    reverse_proxy localhost:8080
-}
-```
-`sudo apt install caddy`, paste, `sudo systemctl reload caddy`. Set
-`PUBLIC_BASE_URL=https://api.your-domain.xyz` in the backend `.env`.
+
+The repo's `deploy/Caddyfile` proxies `api.<domain>` → `localhost:8080` and adds an
+HSTS header (api subdomain only — the apex/www live on Netlify). Ports 80/443 must be
+open in the security group (ACME + TLS); `:8080` stays loopback-only. The express app
+sets `trust proxy = loopback` (src/index.ts), so the per-IP rate limits key on the real
+client IP from Caddy's `X-Forwarded-For`. Set
+`PUBLIC_BASE_URL=https://api.<your-domain>` in the backend `.env`.
 
 **b) No DNS yet (interim):** a Cloudflare tunnel gives you an https URL in one command:
 
@@ -162,6 +165,8 @@ URL (pointing a deployed site at a tunnelled local backend needs no redeploy).
 | `PUBLIC_BASE_URL` | backend | the backend's own https base (tunnel/domain) |
 | `RECENT_INTENTS_LIMIT` | backend | home-page recent list size (query param caps at 20) |
 | `web/config.js` | web tier | the API base the pages fetch |
+| `RATE_LIMIT_WRITES_PER_MIN` | backend | per-IP cap on `POST /stream` (402 + verify) + annotate — public-surface abuse guard (default 30) |
+| `RATE_LIMIT_READS_PER_MIN` | backend | per-IP cap on report/recent GETs — the hosted pages fetch these on every view (default 120) |
 
 ## 5. Local, still-first
 
