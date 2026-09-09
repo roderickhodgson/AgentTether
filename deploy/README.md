@@ -154,15 +154,17 @@ demo session, replace with (a) for anything persistent.
 
 ## 3. Web on Netlify
 
-```bash
-# set the API base the pages will use in production:
-$EDITOR web/config.js    # window.AGENTTETHER_API = "https://api.your-domain.xyz";
-npx netlify deploy --prod --dir web
-```
-Then set the backend's `PUBLIC_SITE_URL` to the Netlify URL (`https://<site>.netlify.app`)
-and restart the service — report links in the 202 bodies and webhooks point there. The
-`/w/:id` deep links work via the rewrite in `netlify.toml`; `?api=` still overrides per
-URL (pointing a deployed site at a tunnelled local backend needs no redeploy).
+The site is Git-imported: `config.js` is committed and **host-aware** — the production
+base (`https://api.<domain>`) on any non-local host, `http://localhost:8080` when
+served locally (`netlify dev` :8888, plain http servers, `file://`). Deploying is
+`git push` (Netlify builds on main); `npx netlify deploy --prod --dir web` remains the
+manual fallback.
+
+Then set the backend's `PUBLIC_SITE_URL` to the web tier's https base
+(`https://<domain>` or `https://<site>.netlify.app`) and restart the service — report
+links in the 202 bodies and webhooks point there. The `/w/:id` deep links work via the
+rewrite in `netlify.toml`; `?api=` still overrides per URL (pointing a deployed site at
+a tunnelled local backend needs no redeploy).
 
 ## 4. Production env matrix
 
@@ -171,7 +173,7 @@ URL (pointing a deployed site at a tunnelled local backend needs no redeploy).
 | `PUBLIC_SITE_URL` | backend | where report links point (the web tier) |
 | `PUBLIC_BASE_URL` | backend | the backend's own https base (tunnel/domain) |
 | `RECENT_INTENTS_LIMIT` | backend | home-page recent list size (query param caps at 20) |
-| `web/config.js` | web tier | the API base the pages fetch |
+| `web/config.js` | web tier | the API base the pages fetch (host-aware: prod base on non-local hosts, localhost when served locally; `?api=` overrides) |
 | `RATE_LIMIT_WRITES_PER_MIN` | backend | per-IP cap on `POST /stream` (402 + verify) + annotate — public-surface abuse guard (default 30) |
 | `RATE_LIMIT_READS_PER_MIN` | backend | per-IP cap on report/recent GETs — the hosted pages fetch these on every view (default 120) |
 
