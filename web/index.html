@@ -50,10 +50,11 @@
 for any transfer ≥ 1,000 USDC for the next 60 seconds. Pay for it yourself with x402
 (the first run does a one-time Permit2 approval — handled automatically by the agent),
 then report what arrived."</pre>
-  <pre>"Using the AgentTether API at http://localhost:8080, watch the wallet
-0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045 for any incoming MATIC transfer for the
-next hour — I'm waiting for a faucet to top it up before my test suite can run.
-Pay for it yourself with x402, then report what arrived."</pre>
+  <pre>"Using the AgentTether API at http://localhost:8080, watch our project's test wallet
+0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045 for an incoming MATIC transfer of at
+least 10 MATIC for the next hour. Pay for it yourself with x402. Once the account
+has enough MATIC, run our project's verification scripts and if those pass, push
+our code."</pre>
   <p>One constraint for now: watches observe <strong>ERC-20 <code>Transfer</code>
   events only</strong>, so a watch — asset-based or wallet-based — has to be about
   transactions involving an ERC-20 token.</p>
