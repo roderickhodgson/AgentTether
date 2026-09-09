@@ -88,7 +88,18 @@ if [ ! -e /etc/sysctl.d/99-agenttether-swap.conf ]; then
 fi
 sysctl -qw vm.swappiness=10 2>/dev/null || true
 
-# ── 8. systemd unit + start ──────────────────────────────────────────────────
+# ── 8. caddy — https front (repo Caddyfile); ACME retries until the api A record resolves ──
+if ! command -v caddy > /dev/null 2>&1; then
+  apt-get install -y -qq caddy
+fi
+if [ -f "$APP_DIR/deploy/Caddyfile" ]; then
+  cp "$APP_DIR/deploy/Caddyfile" /etc/caddy/Caddyfile
+  systemctl reload-or-restart caddy
+  echo "caddy $(caddy version) — reverse-proxies api.agenttether.cc → :8080 (auto-TLS once the api A record resolves)"
+  echo "remember: the security group needs 80/443 open (ACME + TLS); :8080 stays loopback-only"
+fi
+
+# ── 9. systemd unit + start ──────────────────────────────────────────────────
 cp "$APP_DIR/deploy/agenttether.system.service" /etc/systemd/system/agenttether.service
 systemctl daemon-reload
 systemctl enable -q agenttether

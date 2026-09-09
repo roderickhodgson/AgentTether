@@ -84,6 +84,7 @@ user with home `/opt/agenttether` (matching the systemd unit); generates a
 GitHub → Settings → Deploy keys (read-only access, nothing more); clones the repo;
 scaffolds `.env` from `.env.example`; ensures the **swapfile** (below); runs
 `npm ci` + `prisma generate` + `prisma db push` once `DATABASE_URL` is real; installs
+Caddy and copies `deploy/Caddyfile` (the https front, §2a); installs
 `agenttether.system.service` and starts the backend.
 
 `.env` (edit on the box, never in GitHub): DATABASE_URL (this server's own Neon
@@ -136,6 +137,12 @@ open in the security group (ACME + TLS); `:8080` stays loopback-only. The expres
 sets `trust proxy = loopback` (src/index.ts), so the per-IP rate limits key on the real
 client IP from Caddy's `X-Forwarded-For`. Set
 `PUBLIC_BASE_URL=https://api.<your-domain>` in the backend `.env`.
+
+The **bootstrap (§1) does both steps automatically** — and it's safe to run before
+DNS exists: Caddy's ACME fetch retries in the background, so TLS comes up the moment
+the `api` A record resolves. Config refresh is bootstrap-only (same as the systemd
+unit file): re-run `sudo bash bootstrap-ec2.sh` after changing the repo Caddyfile.
+The manual commands above remain for out-of-band changes.
 
 **b) No DNS yet (interim):** a Cloudflare tunnel gives you an https URL in one command:
 
