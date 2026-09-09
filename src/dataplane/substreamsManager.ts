@@ -73,16 +73,24 @@ const normalizeHex = (h: string) => h.toLowerCase().replace(/^0x/, "");
 // timestamp, which leaves BOTH time guards open (the designed fail-open default: an
 // absent clock never silently disqualifies matches). A malformed minAmount disables
 // matching for the intent rather than crashing the stream.
+//
+// Selectors (generalized): an intent watches EITHER an asset (targetContract + optional
+// minAmount — the legacy form) OR a wallet (watchWallet + direction: the transfer must
+// touch the wallet on the watched side). Both together = "this asset, involving this
+// wallet". minAmount defaults to 0 (any transfer of the watched asset); the router
+// enforces that at least one selector is present — the matcher fails closed on neither.
 export type MatchableIntent = {
-  targetContract: string;
-  eventCondition: unknown; // { minAmount?: string } per the API contract
+  targetContract: string | null; // asset selector — optional when a wallet is watched
+  watchWallet?: string | null; // wallet predicate (either side, per direction)
+  direction?: string | null; // incoming | outgoing | any (default any)
+  eventCondition: unknown; // { minAmount?: string }
   createdAt: Date;
   ttlTimestamp: Date;
 };
 
 export function matchesIntent(
   intent: MatchableIntent,
-  transfer: { contract: string; value: string },
+  transfer: { contract: string; from: string; to: string; value: string },
   blockTime: Date | null,
 ): boolean {
   if (blockTime) {
@@ -92,9 +100,25 @@ export function matchesIntent(
     // Window end guard (TTL): never meter events for an intent whose window has closed.
     if (blockTime > intent.ttlTimestamp) return false;
   }
-  if (normalizeHex(transfer.contract) !== normalizeHex(intent.targetContract)) return false;
-  const minAmount = (intent.eventCondition as { minAmount?: string } | null)?.minAmount;
-  if (!minAmount) return false;
+  // Asset selector: only constrains when the intent names a contract.
+  if (intent.targetContract && normalizeHex(transfer.contract) !== normalizeHex(intent.targetContract)) {
+    return false;
+  }
+  // Wallet selector + direction. Without a wallet AND without a contract the intent
+  // selects nothing — fail closed (the router rejects such intents at creation).
+  if (intent.watchWallet) {
+    const wallet = normalizeHex(intent.watchWallet);
+    const dir = intent.direction ?? "any";
+    const incoming = normalizeHex(transfer.to) === wallet;
+    const outgoing = normalizeHex(transfer.from) === wallet;
+    if (dir === "incoming" && !incoming) return false;
+    if (dir === "outgoing" && !outgoing) return false;
+    if (dir === "any" && !incoming && !outgoing) return false;
+  } else if (!intent.targetContract) {
+    return false;
+  }
+  // Amount gate: optional — 0 (or absent/blank) means any transfer of the watched asset.
+  const minAmount = ((intent.eventCondition as { minAmount?: string } | null)?.minAmount ?? "").trim() || "0";
   try {
     if (BigInt(transfer.value) < BigInt(minAmount)) return false;
   } catch {

@@ -45,7 +45,9 @@ export const MAX_TTL_S = 86_400;
 
 type StreamIntentBody = {
   query_intent?: string;
-  target_contract?: string;
+  target_contract?: string; // asset selector — optional when a wallet is watched
+  watch_wallet?: string; // wallet predicate (either side, per direction)
+  direction?: "incoming" | "outgoing" | "any";
   event_condition?: { minAmount?: string };
   ttl_seconds?: number;
   webhook_url?: string;
@@ -56,6 +58,7 @@ type StreamIntentBody = {
 
 const isHexAddress = (v: string) => /^0x[0-9a-fA-F]{40}$/.test(v);
 const isAtomicString = (v: string | undefined) => typeof v === "string" && /^\d+$/.test(v);
+const DIRECTIONS = new Set(["incoming", "outgoing", "any"]);
 
 function resourceUrl(req: Request, intentId: string): string {
   const host = req.get("host") ?? `localhost:${process.env.PORT ?? 8080}`;
@@ -124,12 +127,26 @@ async function createIntentHandler(req: Request, res: Response) {
   const body = (req.body ?? {}) as StreamIntentBody;
   const problems: string[] = [];
   if (!body.query_intent || typeof body.query_intent !== "string") problems.push("query_intent (string) is required");
-  if (!body.target_contract || !isHexAddress(body.target_contract)) problems.push("target_contract (0x address) is required");
+  // Selectors: at least one of asset (target_contract) or wallet (watch_wallet); both
+  // together = "this asset, involving this wallet". minAmount is optional (default 0 =
+  // any transfer of the watched asset) and is denominated in the asset's atomic units.
+  if (body.target_contract !== undefined && !isHexAddress(body.target_contract)) {
+    problems.push("target_contract must be a 0x address");
+  }
+  if (body.watch_wallet !== undefined && !isHexAddress(body.watch_wallet)) {
+    problems.push("watch_wallet must be a 0x address");
+  }
+  if (!body.target_contract && !body.watch_wallet) {
+    problems.push("watch what? provide target_contract (asset) or watch_wallet (address), or both");
+  }
+  if (body.direction !== undefined && !DIRECTIONS.has(body.direction)) {
+    problems.push("direction must be one of: incoming, outgoing, any");
+  }
   if (body.rate_per_event_atomic !== undefined || body.max_limit_atomic !== undefined) {
     problems.push("pricing is server-owned: the ceiling is quoted from ttl_seconds (per-block rate × budget) — do not send rate_per_event_atomic or max_limit_atomic");
   }
-  if (!body.event_condition || !isAtomicString(body.event_condition.minAmount)) {
-    problems.push("event_condition.minAmount (atomic-unit string) is required");
+  if (body.event_condition?.minAmount !== undefined && !isAtomicString(body.event_condition.minAmount)) {
+    problems.push("event_condition.minAmount must be an atomic-unit string");
   }
   if (!Number.isFinite(Number(body.ttl_seconds)) || Number(body.ttl_seconds) < MIN_TTL_S) {
     problems.push(`ttl_seconds (number ≥ ${MIN_TTL_S}) is required`);
@@ -145,12 +162,14 @@ async function createIntentHandler(req: Request, res: Response) {
   const { requirements, ttl, maxLimit, budgetBlocks } = await streamRequirements(body);
   const intent = await createIntent({
     agentWallet: "unknown",
-    targetContract: body.target_contract!,
+    targetContract: body.target_contract ?? null,
+    watchWallet: body.watch_wallet ?? null,
+    direction: body.direction ?? (body.watch_wallet ? "any" : null),
     ttlTimestamp: new Date(Date.now() + ttl * 1000),
     maxLimitAtomic: maxLimit,
     perBlockRateAtomic: perBlockRateAtomic().toString(),
     budgetBlocks,
-    eventCondition: body.event_condition as { minAmount: string },
+    eventCondition: body.event_condition ?? { minAmount: "0" },
     webhookUrl: body.webhook_url,
   });
 

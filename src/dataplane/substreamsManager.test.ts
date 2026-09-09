@@ -19,8 +19,16 @@ const intent = (over: Partial<MatchableIntent> = {}): MatchableIntent => ({
   ...over,
 });
 
-const transfer = (over: Partial<{ contract: string; value: string }> = {}) => ({
+const WALLET = "0x1111111111111111111111111111111111111111";
+const OTHER = "0x2222222222222222222222222222222222222222";
+const SHIB = "0x95aD61b0a150d79219dC64F1E48E01220E98FC4d0";
+
+const transfer = (
+  over: Partial<{ contract: string; from: string; to: string; value: string }> = {},
+) => ({
   contract: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+  from: OTHER,
+  to: OTHER,
   value: "1500000000",
   ...over,
 });
@@ -75,17 +83,55 @@ describe("matchesIntent — contract and amount conditions", () => {
 });
 
 describe("matchesIntent — malformed conditions disable, never crash", () => {
-  it("a missing minAmount disables the intent", () => {
-    expect(matchesIntent(intent({ eventCondition: {} }), transfer(), BLOCK_TIME)).toBe(false);
-    expect(matchesIntent(intent({ eventCondition: null }), transfer(), BLOCK_TIME)).toBe(false);
+  it("an absent minAmount means ANY transfer of the watched asset (generalized semantics)", () => {
+    expect(matchesIntent(intent({ eventCondition: {} }), transfer(), BLOCK_TIME)).toBe(true);
+    expect(matchesIntent(intent({ eventCondition: null }), transfer(), BLOCK_TIME)).toBe(true);
   });
 
   it("a non-numeric minAmount disables the intent instead of throwing", () => {
     expect(matchesIntent(intent({ eventCondition: { minAmount: "1.5 ETH" } }), transfer(), BLOCK_TIME)).toBe(false);
-    expect(matchesIntent(intent({ eventCondition: { minAmount: "" } }), transfer(), BLOCK_TIME)).toBe(false);
   });
 
   it("a non-numeric transfer value disables the match instead of throwing", () => {
     expect(matchesIntent(intent(), transfer({ value: "not-a-number" }), BLOCK_TIME)).toBe(false);
+  });
+});
+
+describe("matchesIntent — wallet watches (generalized selectors)", () => {
+  const walletIntent = (over: Partial<MatchableIntent> = {}): MatchableIntent =>
+    intent({ targetContract: null, watchWallet: WALLET, ...over });
+
+  it("any direction: matches a transfer touching the wallet on either side, any token", () => {
+    expect(matchesIntent(walletIntent(), transfer({ from: WALLET, contract: SHIB }), BLOCK_TIME)).toBe(true);
+    expect(matchesIntent(walletIntent(), transfer({ to: WALLET, contract: SHIB }), BLOCK_TIME)).toBe(true);
+    expect(matchesIntent(walletIntent(), transfer({ from: OTHER, to: OTHER }), BLOCK_TIME)).toBe(false);
+  });
+
+  it("incoming: only when the wallet is the recipient", () => {
+    const inc = walletIntent({ direction: "incoming" });
+    expect(matchesIntent(inc, transfer({ to: WALLET, contract: SHIB }), BLOCK_TIME)).toBe(true);
+    expect(matchesIntent(inc, transfer({ from: WALLET, to: OTHER, contract: SHIB }), BLOCK_TIME)).toBe(false);
+  });
+
+  it("outgoing: only when the wallet is the sender", () => {
+    const out = walletIntent({ direction: "outgoing" });
+    expect(matchesIntent(out, transfer({ from: WALLET, contract: SHIB }), BLOCK_TIME)).toBe(true);
+    expect(matchesIntent(out, transfer({ to: WALLET, from: OTHER, contract: SHIB }), BLOCK_TIME)).toBe(false);
+  });
+
+  it("wallet + asset: the contract still filters — 'USDC involving this wallet'", () => {
+    const both = walletIntent({ targetContract: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48" });
+    expect(matchesIntent(both, transfer({ to: WALLET }), BLOCK_TIME)).toBe(true);
+    expect(matchesIntent(both, transfer({ to: WALLET, contract: SHIB }), BLOCK_TIME)).toBe(false);
+  });
+
+  it("wallet + minAmount: the gate applies in the asset's atomic units", () => {
+    const gated = walletIntent({ direction: "incoming", eventCondition: { minAmount: "1000000000" } });
+    expect(matchesIntent(gated, transfer({ to: WALLET, value: "1500000000" }), BLOCK_TIME)).toBe(true);
+    expect(matchesIntent(gated, transfer({ to: WALLET, value: "5" }), BLOCK_TIME)).toBe(false);
+  });
+
+  it("an intent with neither selector fails closed", () => {
+    expect(matchesIntent(intent({ targetContract: null, eventCondition: {} }), transfer(), BLOCK_TIME)).toBe(false);
   });
 });

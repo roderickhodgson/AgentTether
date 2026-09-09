@@ -44,8 +44,10 @@ export type IntentReport = {
   intent: {
     id: string;
     status: string;
-    asset: string;
-    target_contract: string;
+    asset: string | null;
+    target_contract: string | null;
+    watch_wallet: string | null;
+    direction: string | null;
     min_amount_atomic: string;
     created_at: string;
     expires_at: string;
@@ -79,7 +81,9 @@ export type IntentReport = {
 export function buildReport(intent: {
   id: string;
   status: string;
-  targetContract: string;
+  targetContract: string | null;
+  watchWallet?: string | null;
+  direction?: string | null;
   eventCondition: unknown;
   createdAt: Date;
   ttlTimestamp: Date;
@@ -123,8 +127,10 @@ export function buildReport(intent: {
     intent: {
       id: intent.id,
       status: intent.status,
-      asset: assetName(intent.targetContract),
-      target_contract: hex0x(intent.targetContract),
+      asset: intent.targetContract ? assetName(intent.targetContract) : null,
+      target_contract: intent.targetContract ? hex0x(intent.targetContract) : null,
+      watch_wallet: intent.watchWallet ? hex0x(intent.watchWallet) : null,
+      direction: intent.direction ?? null,
       min_amount_atomic: minAmount,
       created_at: intent.createdAt.toISOString(),
       expires_at: intent.ttlTimestamp.toISOString(),
@@ -174,6 +180,8 @@ export function mountReport(app: Express): void {
         id: true,
         status: true,
         targetContract: true,
+        watchWallet: true,
+        direction: true,
         eventCondition: true,
         createdAt: true,
         ttlTimestamp: true,
@@ -186,7 +194,9 @@ export function mountReport(app: Express): void {
       requests: rows.map((r) => ({
         id: r.id,
         status: r.status,
-        asset: assetName(r.targetContract),
+        asset: r.targetContract ? assetName(r.targetContract) : null,
+        watch_wallet: r.watchWallet ? hex0x(r.watchWallet) : null,
+        direction: r.direction ?? null,
         min_amount_atomic: (r.eventCondition as { minAmount?: string } | null)?.minAmount ?? "0",
         created_at: r.createdAt.toISOString(),
         events_matched: r.eventsMatched,

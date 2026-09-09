@@ -19,7 +19,9 @@ enum IntentStatus {
 model Intent {
   id                 String       @id @default(uuid())
   agentWallet        String       @map("agent_wallet")
-  targetContract     String       @map("target_contract")
+  targetContract     String?      @map("target_contract")
+  watchWallet        String?      @map("watch_wallet")
+  direction          String?      @map("direction")
   ttlTimestamp       DateTime     @map("ttl_timestamp")
   maxLimitAtomic     String       @map("max_limit_atomic")
   perBlockRateAtomic String       @map("per_block_rate_atomic")

@@ -6,11 +6,13 @@ export type IntentStatusValue = IntentStatus;
 
 export type CreateIntentInput = {
   agentWallet: string;
-  targetContract: string;
+  targetContract?: string | null; // asset selector — optional when a wallet is watched
+  watchWallet?: string | null; // wallet predicate (either side, per direction)
+  direction?: string | null; // incoming | outgoing | any
   ttlTimestamp: Date;
   maxLimitAtomic: string;
   perBlockRateAtomic: string;
-  budgetBlocks: number;
+  budgetBlocks?: number;
   eventCondition: Prisma.InputJsonValue;
   webhookUrl?: string;
 };
@@ -19,6 +21,7 @@ export async function createIntent(input: CreateIntentInput) {
   return prisma.intent.create({
     data: {
       ...input,
+      budgetBlocks: input.budgetBlocks ?? 1,
       status: "PENDING_PAYMENT",
       lifecycle: [{ step: "requested", at: new Date().toISOString() }] as unknown as Prisma.InputJsonValue,
     },

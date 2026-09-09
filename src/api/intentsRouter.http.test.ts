@@ -119,7 +119,10 @@ describe("3.2 — 402 issuance", () => {
     const res = await post({});
     expect(res.status).toBe(400);
     const problems = ((await res.json()) as { problems: string[] }).problems;
-    expect(problems).toHaveLength(4); // query_intent, target_contract, event_condition, ttl_seconds
+    expect(problems).toHaveLength(3); // query_intent, "watch what?" (no selector), ttl_seconds
+    expect(problems.join(" ")).toMatch(/query_intent/);
+    expect(problems.join(" ")).toMatch(/watch what/);
+    expect(problems.join(" ")).toMatch(/ttl_seconds/);
   });
 
   it("rejects client-set pricing — the rate is the server's decision, never a request field", async () => {
