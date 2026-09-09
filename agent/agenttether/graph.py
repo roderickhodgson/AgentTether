@@ -90,6 +90,7 @@ class AgentState(TypedDict):
     watch: dict[str, Any]
     job_id: str
     quoted_ceiling: str
+    report_url: str
     notice: dict[str, Any]
     narration: str
     decision: str
@@ -169,7 +170,7 @@ def build_graph(
         quoted = str(quoted or job.get("quoted_ceiling") or "server-quoted")
         if annotate:
             annotate(job["job_id"], "plan", **{k: str(v) for k, v in watch.items()})
-        return {"job_id": job["job_id"], "quoted_ceiling": quoted}
+        return {"job_id": job["job_id"], "quoted_ceiling": quoted, "report_url": job.get("report_url", "")}
 
     # ── wait_for_webhook: THE PAUSE ─────────────────────────────────────────
     def wait_for_webhook(state: AgentState) -> dict[str, Any]:

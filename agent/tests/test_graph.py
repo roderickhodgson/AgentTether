@@ -38,7 +38,13 @@ class FakeStream:
 
     def create_intent(self, **_kw):
         self.calls += 1
-        return {"job_id": f"j-{self.calls}", "status": "MONITORING"}
+        # 202 shape per the backend: job_id, status, report_url (the backend's own
+        # link, built from its PUBLIC_SITE_URL — the web tier matching the API)
+        return {
+            "job_id": f"j-{self.calls}",
+            "status": "MONITORING",
+            "report_url": f"https://web.test/w/j-{self.calls}",
+        }
 
 
 def make_graph(reissue_budget: int = 0, webhook_url: str = "http://127.0.0.1:9098/hook"):
@@ -68,6 +74,7 @@ def test_graph_pauses_at_wait_for_webhook_without_observing():
     assert stream.calls == 1
     assert result["job_id"] == "j-1"
     assert result["quoted_ceiling"] == "500"
+    assert result["report_url"] == "https://web.test/w/j-1"  # backend's own link, not recomputed
     interrupts = result.get("__interrupt__")
     assert interrupts, "expected the graph to park on wait_for_webhook"
     assert interrupts[0].value["state"] == "monitoring"

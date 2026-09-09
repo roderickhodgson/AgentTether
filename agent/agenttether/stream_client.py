@@ -58,9 +58,11 @@ class StreamClient:
     ) -> dict[str, Any]:
         """Create the intent; 402→voucher→202 happens inside the wrapped session.
 
-        Returns the 202 payload: {job_id, status, agent_wallet, ...}.
-        A wallet watch (watch_wallet + optional direction/target_contract) replaces
-        the asset-only form; min_amount_atomic=None means any transfer.
+        Returns the 202 payload: {job_id, status, agent_wallet, report_url, ...}.
+        `report_url` is the BACKEND's own link (built from its PUBLIC_SITE_URL) — the
+        web tier that matches the API the agent is talking to. A wallet watch
+        (watch_wallet + optional direction/target_contract) replaces the asset-only
+        form; min_amount_atomic=None means any transfer.
         """
         res = self.session.post(
             f"{self.server_url}{STREAM_PATH}",

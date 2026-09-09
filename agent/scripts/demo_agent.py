@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import threading
 import time
 
@@ -27,6 +28,17 @@ from agenttether.config import load_config
 from agenttether.demo_graph import DemoStack
 from agenttether.graph import factual_summary
 from agenttether.webhook_server import WebhookServer
+
+
+def report_link(state: dict) -> str:
+    """The backend's own report_url wins — it builds the link from its PUBLIC_SITE_URL,
+    so it always matches the web tier of the API the agent negotiated with. The env
+    fallback only covers 202 bodies that predate the report_url field."""
+    url = state.get("report_url")
+    if url:
+        return url
+    site = os.environ.get("DEMO_SITE_URL") or os.environ.get("PUBLIC_SITE_URL") or "http://localhost:8888"
+    return f"{site.rstrip('/')}/w/{state.get('job_id', '?')}"
 
 
 def main() -> None:
@@ -105,6 +117,7 @@ def main() -> None:
     else:
         print(f"plan: watch {w.get('target_contract')} for {gate}, ttl {w.get('ttl_seconds')}s — \"{w.get('query_intent')}\"")
     print(f"negotiated: job {job_id} · quoted ceiling {paused.get('quoted_ceiling')} atomic")
+    print(f"report page: {report_link(paused)}  ← watch this one live")
     print("⏸  PAUSED — agent asleep on wait_for_webhook (zero compute)…")
     arm_watchdog(int(paused.get("watch", {}).get("ttl_seconds", 60)) + 180)
 
@@ -120,9 +133,7 @@ def main() -> None:
     print(f"narration: {final.get('narration') or factual_summary(final)}")
     if notice.get("tx_hash"):
         print(f"settlement: https://sepolia.basescan.org/tx/{notice['tx_hash']}")
-    import os
-    site = os.environ.get("DEMO_SITE_URL") or os.environ.get("PUBLIC_SITE_URL") or "http://localhost:8888"
-    print(f"report page: {site}/w/{job_id}  ← shareable rendering of this watch (web tier)")
+    print(f"report page: {report_link(final)}  ← shareable rendering of this watch (web tier)")
     print("\ndemo agent: PASS")
 
 
