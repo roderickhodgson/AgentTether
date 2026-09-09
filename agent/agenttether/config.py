@@ -35,6 +35,7 @@ class Config:
     state_path: Path
     opencode_url: str = ""
     llm_provider: str = "scripted"
+    webhook_public_url: str = ""  # public https base for the receiver (tunnel) — see webhook_server.url()
     extras: dict[str, str] = field(default_factory=dict)
 
 
@@ -73,4 +74,5 @@ def load_config(env: dict[str, str] | None = None) -> Config:
         state_path=Path(env.get("AGENT_STATE_PATH", str(REPO_ROOT / "agent" / "state.json"))),
         opencode_url=env.get("OPENCODE_SERVER_URL", "http://127.0.0.1:4096").rstrip("/"),
         llm_provider=env.get("AGENT_LLM", "scripted"),
+        webhook_public_url=env.get("AGENT_WEBHOOK_PUBLIC_URL", "").rstrip("/"),
     )

@@ -55,3 +55,9 @@ def test_llm_provider_default_is_scripted():
     cfg = load_config(base_env())
     assert cfg.llm_provider == "scripted"
     assert cfg.opencode_url == "http://127.0.0.1:4096"
+
+
+def test_webhook_public_url_parsed_and_stripped():
+    assert load_config(base_env()).webhook_public_url == ""
+    cfg = load_config(base_env(AGENT_WEBHOOK_PUBLIC_URL="https://rand.ngrok-free.app/"))
+    assert cfg.webhook_public_url == "https://rand.ngrok-free.app"

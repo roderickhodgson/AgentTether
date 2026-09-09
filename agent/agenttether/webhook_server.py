@@ -77,6 +77,12 @@ class WebhookServer:
             time.sleep(0.2)
 
     def url(self) -> str:
+        # AGENT_WEBHOOK_PUBLIC_URL overrides the loopback default: a DEPLOYED backend
+        # can only reach this receiver through a public https tunnel (ngrok/cloudflared
+        # — the backend's SSRF rule requires https for non-loopback webhook targets).
+        public = self.config.webhook_public_url
+        if public:
+            return f"{public.rstrip('/')}/hook"
         return f"http://{self.config.webhook_host}:{self.config.webhook_port}/hook"
 
     def serve_forever(self) -> None:

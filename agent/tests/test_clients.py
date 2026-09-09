@@ -118,3 +118,17 @@ def test_webhook_notices_accessor():
     server._callbacks = []
     assert server.notices("j-2") == [{"intent_id": "j-2"}]
     assert server.notices("j-2", wait=False) == []
+
+
+def test_webhook_url_loopback_default_and_public_tunnel_override():
+    from types import SimpleNamespace
+
+    server = WebhookServer.__new__(WebhookServer)  # url() only reads the config
+    server.config = SimpleNamespace(webhook_public_url="", webhook_host="127.0.0.1", webhook_port=9098)
+    assert server.url() == "http://127.0.0.1:9098/hook"
+
+    # deployed-backend demos: the tunnel base wins, trailing slash normalized
+    server.config = SimpleNamespace(
+        webhook_public_url="https://rand.ngrok-free.app/", webhook_host="127.0.0.1", webhook_port=9098
+    )
+    assert server.url() == "https://rand.ngrok-free.app/hook"

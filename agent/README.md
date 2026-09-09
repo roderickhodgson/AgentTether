@@ -27,7 +27,8 @@ python3 -m venv .venv
 Configuration comes from the repo-root `.env` (shared with the backend): at minimum
 `EVM_PRIVATE_KEY` (the agent payer). Optional pins: `AGENT_WALLET` (must match the
 key — validated at load), `SERVER_URL`, `RPC_URL`, `AGENT_WEBHOOK_PORT`,
-`AGENT_LLM` (`opencode` | `scripted`), `OPENCODE_SERVER_URL`.
+`AGENT_WEBHOOK_PUBLIC_URL`, `AGENT_LLM` (`opencode` | `scripted`),
+`OPENCODE_SERVER_URL`.
 
 ## State
 
@@ -77,6 +78,27 @@ watch (events table with mainnet explorer links, settlement receipt with the Bas
 Sepolia link, the cross-chain disclosure). Served by the backend at `/w/:id`; the same
 page deploys to Netlify (`npx netlify deploy --prod --dir web` from the repo root) and
 fetches any reachable API via `?api=<base>`.
+
+### Testing against a deployed backend
+
+The agent is client-only — point it at a hosted API (`SERVER_URL=https://api.<domain>`)
+and give the deployed backend a way to reach this machine's receiver with a **public
+https** tunnel (the backend's SSRF rule rejects plain-http non-loopback webhook
+targets). Any tunnel works — ngrok or cloudflared:
+
+```bash
+ngrok http 9098                                  # → https://<random>.ngrok-free.app
+# or: cloudflared tunnel --url http://127.0.0.1:9098
+
+SERVER_URL=https://api.<domain> \
+AGENT_WEBHOOK_PUBLIC_URL=https://<random>-tunnel-url \
+  .venv/bin/python scripts/demo_agent.py
+```
+
+The receiver's `url()` prefers `AGENT_WEBHOOK_PUBLIC_URL`, so the intent's `webhook_url`
+is the tunnel URL. Without it (local backend), the loopback default applies and no
+tunnel is needed. The printed `webhook receiver:` line shows exactly what the backend
+will POST to.
 
 ### The LLM layer
 
