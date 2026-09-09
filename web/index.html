@@ -61,6 +61,11 @@ our code."</pre>
   <p>The 202 response carries a <code>report_url</code> back to your agent — that's a
   link into this site's flow-chart rendering of the whole process.</p>
 
+  <p>Building your own agent? The complete client contract — the 402→voucher→202 flow,
+  the webhook notice, and the lifecycle annotations that render on the flow-chart — is
+  specced in <a
+  href="https://github.com/roderickhodgson/AgentTether/blob/main/AGENT_API.md"><code>AGENT_API.md</code></a>.</p>
+
   <p>The agents driving this are plain x402 clients — the API is agent-agnostic by
   design. Our own test agents use <strong>LangGraph</strong> for one reason: durable
   interrupts. The graph parks at <code>wait_for_webhook</code> with zero compute while

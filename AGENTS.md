@@ -58,4 +58,5 @@ Guidance for AI coding agents (and humans) working on this repo. The README is t
 ## Docs-as-plan
 
 - `README.md` holds the implementation checklist and ordered risk register — keep both updated as work completes. Facts already verified live are documented there (with links/evidence); don't restate or contradict them.
+- `AGENT_API.md` is the third-party agent contract (402→voucher→202, webhook notice, annotate, report) — keep it in sync when the wire shape changes; the home page links to it.
 - `.opencode/skills/` contains `substreams-*` reference skills — load them for Substreams-related work.

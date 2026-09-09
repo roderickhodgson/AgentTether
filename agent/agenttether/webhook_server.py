@@ -6,7 +6,7 @@ intent. Two consumers:
 - the graph resume path (commit 3): /hook → resolve intent → `Command(resume=...)`.
 
 The backend's webhook contract (from the Node e2e): POST JSON, expects 200. Notices
-carry `type` (intent.delivered | intent.timeout), `intent_id`, `tx_hash`,
+carry `type` (settlement.confirmed | intent.timeout), `intent_id`, `tx_hash`,
 `amount_charged_atomic`, `events_matched`, and `events` (the matched transfers).
 """
 from __future__ import annotations
