@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "commit SHA to deploy (default: latest main) — dispatching an older SHA is the rollback mechanism"
+        required: false
+        default: ""
 
 jobs:
   fast-suite:
@@ -38,3 +44,37 @@ jobs:
       - run: pip install -e agent
       - working-directory: agent
         run: pytest -q
+
+  deploy-backend:
+    # Auto-deploy to the EC2 backend box (deploy/README.md §1): swap ensure →
+    # fetch/checkout → npm ci → prisma generate + db push → graceful restart →
+    # healthz gate. Gated on both suites; PRs never deploy; the manual dispatch
+    # (with an optional older SHA) is the rollback mechanism. Secrets: EC2_HOST
+    # + EC2_SSH_KEY only — the app's own secrets (.env) live solely on the box.
+    needs: [fast-suite, agent-suite]
+    if: >-
+      ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: deploy-prod
+      cancel-in-progress: false
+    env:
+      EC2_HOST: ${{ secrets.EC2_HOST }}
+      EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+    steps:
+      - name: Deploy to EC2
+        if: ${{ env.EC2_HOST != '' && env.EC2_SSH_KEY != '' }}
+        run: |
+          install -m 600 /dev/null deploy_key.pem
+          echo "$EC2_SSH_KEY" > deploy_key.pem
+          ssh -i deploy_key.pem \
+              -o StrictHostKeyChecking=accept-new \
+              -o ServerAliveInterval=30 \
+              "ubuntu@$EC2_HOST" \
+              "sudo /opt/agenttether/deploy/deploy.sh $DEPLOY_SHA"
+        env:
+          DEPLOY_SHA: ${{ inputs.sha || github.sha }}
+      - name: Warn (secrets not set yet — deploy skipped)
+        if: ${{ env.EC2_HOST == '' || env.EC2_SSH_KEY == '' }}
+        run: echo "::warning::EC2_HOST / EC2_SSH_KEY not set — deploy skipped (see deploy/README.md §1)"

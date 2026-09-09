@@ -15,6 +15,7 @@ if [ -z "${NODE_BIN:-}" ]; then
   for candidate in \
     "$HOME/.nvm/versions/node/v25.9.0/bin/node" \
     /usr/local/bin/node \
+    /usr/bin/node \
     /opt/homebrew/bin/node; do
     if [ -x "$candidate" ]; then NODE_BIN="$candidate"; break; fi
   done

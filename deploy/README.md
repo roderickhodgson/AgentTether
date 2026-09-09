@@ -67,36 +67,55 @@ annotate, recent) and **the web pages live on Netlify**. The pages carry their o
 base (`web/config.js`, overridable per-URL with `?api=`), so the only coupling is CORS —
 which the report/recent/annotate endpoints already allow (`*`).
 
-## 1. Backend on EC2 (Ubuntu)
+## 1. Backend on EC2 (Ubuntu) — auto-deployed from GitHub
+
+One-time bootstrap, then every push to `main` deploys automatically. The bootstrap
+script is idempotent — run it again after filling `.env` and adding the deploy key,
+and it finishes the job:
 
 ```bash
-# one-time server prep (Ubuntu 24.04 LTS; t3.micro is plenty)
-sudo apt update && sudo apt install -y git curl
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash   # or nodesource
-nvm install 25 && nvm alias default 25
-
-# app
-sudo useradd -r -m -d /opt/agenttether -s /usr/sbin/nologin agenttether
-sudo git clone <repo-url> /opt/agenttether && sudo chown -R agenttether: /opt/agenttether
-cd /opt/agenttether
-sudo -u agenttether npm ci && sudo -u agenttether npx prisma generate
-
-# secrets + env (NEVER commit .env) — this server's own database, not your laptop's
-sudo -u agenttether cp .env.example .env    # then edit:
-#   DATABASE_URL=<production Neon url>   SUBSTREAMS_API_KEY=<key>
-#   EVM_PRIVATE_KEY=<payer key>          PAY_TO_ADDRESS=<receiver>
-#   PUBLIC_SITE_URL=https://<your-netlify-site>     # report links point at the web tier
-#   PUBLIC_BASE_URL=https://api.<your-domain>       # the backend's own https base
-#   RECENT_INTENTS_LIMIT=5
-
-sudo -u agenttether npx prisma db push      # schema onto the production database
+scp deploy/bootstrap-ec2.sh ubuntu@<ec2-host>:
+ssh ubuntu@<ec2-host> 'sudo bash bootstrap-ec2.sh'
 ```
 
-Service: `sudo cp deploy/agenttether.system.service /etc/systemd/system/agenttether.service`
-(edit `User=`/paths if yours differ), then `daemon-reload` + `enable --now` — see the
-unit header for commands. Security group: **22** (ssh), **80 + 443** (TLS redirect +
-proxy). The single-writer lease decides who streams: once the EC2 daemon claims the
-lease, any local `npm start` correctly exits instead of double-metering.
+What it does: installs node 25 (nodesource) + git; creates the `agenttether` system
+user with home `/opt/agenttether` (matching the systemd unit); generates a
+**read-only deploy keypair** and prints its public half — add it under
+GitHub → Settings → Deploy keys (read-only access, nothing more); clones the repo;
+scaffolds `.env` from `.env.example`; ensures the **swapfile** (below); runs
+`npm ci` + `prisma generate` + `prisma db push` once `DATABASE_URL` is real; installs
+`agenttether.system.service` and starts the backend.
+
+`.env` (edit on the box, never in GitHub): DATABASE_URL (this server's own Neon
+database, not your laptop's), SUBSTREAMS_API_KEY, EVM_PRIVATE_KEY, PAY_TO_ADDRESS,
+PUBLIC_SITE_URL (the web tier), PUBLIC_BASE_URL (the backend's https base),
+RECENT_INTENTS_LIMIT.
+
+**Repo secrets (Settings → Secrets and variables → Actions):** exactly two —
+
+| Secret | Value |
+|---|---|
+| `EC2_HOST` | the instance's public DNS or IP (no protocol, no user) |
+| `EC2_SSH_KEY` | the private half of a dedicated deploy keypair (public half goes into `ubuntu`'s `authorized_keys` — not your laptop key, not the AWS-launch PEM) |
+
+**Swapfile:** micro instances ship without swap, and a downtime catch-up replay can
+spike memory. Both scripts create a 2G `/swapfile` only when no swap is active
+(`fallocate` → `mkswap` → `swapon`, fstab line guarded against dupes,
+`vm.swappiness=10`). Verify with `swapon --show && free -h`.
+
+**The deploy itself** (`.github/workflows/ci.yml` → `deploy-backend`): gated on both
+test suites (`needs: [fast-suite, agent-suite]`); SSHes in as `ubuntu` and runs
+`sudo /opt/agenttether/deploy/deploy.sh <sha>`, which builds **before** restarting
+(old process keeps streaming — downtime is just the restart: graceful SIGTERM
+releases the single-writer lease instantly, the new stream resumes from the cursor),
+then gates on `healthz` (15 × 2s, failing the job loudly with service logs).
+Rollback: **Run workflow** (dispatch) with the previous SHA.
+
+Risk model, stated plainly: an approved push to `main` is root on this box (the
+deploy path grants it). Keep the security group to 22 (ssh, ideally pinned to
+GitHub Actions' IP ranges) + 80/443, key-only ssh, and treat `main` as protected.
+The single-writer lease decides who streams: once the EC2 daemon claims the lease,
+any local `npm start` correctly exits instead of double-metering.
 
 ## 2. HTTPS in front of the backend (mandatory)
 
