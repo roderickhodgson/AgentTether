@@ -118,6 +118,13 @@ GitHub Actions' IP ranges) + 80/443, key-only ssh, and treat `main` as protected
 The single-writer lease decides who streams: once the EC2 daemon claims the lease,
 any local `npm start` correctly exits instead of double-metering.
 
+**Idle stretches (data-plane off):** Substreams egress bills per byte streamed (~80 GB/month
+head-streaming Ethereum), whether or not anyone is watching. For idle periods, set
+`SUBSTREAMS_ENABLED=false` in the box's `.env` and restart — the daemon keeps serving
+reads, intents and sweeps with **zero egress** (MONITORING intents simply time out
+honestly, unbilled). `/healthz` carries the data-plane state: `stream: "disabled"`,
+`"streaming"`, or `"degraded"` (last error included) — check it after toggling.
+
 ## 2. HTTPS in front of the backend (mandatory)
 
 The Netlify pages are `https` — browsers block them from fetching a plain-`http` API
@@ -173,6 +180,7 @@ a tunnelled local backend needs no redeploy).
 | `PUBLIC_SITE_URL` | backend | where report links point (the web tier) |
 | `PUBLIC_BASE_URL` | backend | the backend's own https base (tunnel/domain) |
 | `RECENT_INTENTS_LIMIT` | backend | home-page recent list size (query param caps at 20) |
+| `SUBSTREAMS_ENABLED` | backend | `false` = run API-only, data plane off — zero Substreams egress (no matching; oneshot capture frozen). `/healthz` reports `stream: "disabled"`. Restart the service after changing it. |
 | `web/config.js` | web tier | the API base the pages fetch (host-aware: prod base on non-local hosts, localhost when served locally; `?api=` overrides) |
 | `RATE_LIMIT_WRITES_PER_MIN` | backend | per-IP cap on `POST /stream` (402 + verify) + annotate — public-surface abuse guard (default 30) |
 | `RATE_LIMIT_READS_PER_MIN` | backend | per-IP cap on report/recent GETs — the hosted pages fetch these on every view (default 120) |

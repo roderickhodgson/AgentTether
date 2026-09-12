@@ -36,6 +36,32 @@ const HEARTBEAT_MS = 30_000; // ...or this much wall time, whichever comes first
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// ── Stream health (surfaced by /healthz) ─────────────────────────────────────
+// The API stays up through any stream failure (index-level catch), so healthz must
+// say more than db:up. `disabled` = started without the data plane (SUBSTREAMS_
+// ENABLED=false — zero egress). `degraded` = attempts failing or producing no blocks
+// (reconnect backoff active, or the manager gave up and runs API-only until restart).
+export type StreamStatus = "starting" | "streaming" | "degraded" | "disabled" | "stopped";
+let health: { status: StreamStatus; detail: string | null } = { status: "starting", detail: null };
+
+export function streamStatus(): { status: StreamStatus; detail: string | null } {
+  return { ...health };
+}
+
+function setStreamStatus(status: StreamStatus, detail: string | null = null): void {
+  health = { status, detail };
+}
+
+// Camera-off configuration: API-only for days at a time, zero Substreams egress.
+// Checked BEFORE the key requirement (disabled mode needs neither key nor lease) and
+// before the single-writer lease (an API-only process against the same DB is safe by
+// design — sweeps are CAS-guarded). While disabled no stream runs: no matching, and
+// the oneshot capture is frozen — the pull endpoint serves only capture rows that
+// survived retention, so a long-idle lookback is expected to come up empty.
+export function substreamsDisabled(): boolean {
+  return (process.env.SUBSTREAMS_ENABLED ?? "true").trim().toLowerCase() === "false";
+}
+
 type StreamHandle = { stop: () => void; done: Promise<{ blocksSeen: number }> };
 // Shared mutable state: `lastCursor` is updated synchronously in stream event handlers,
 // so a restart always resumes from the newest block even while DB writes are still in flight.
@@ -377,11 +403,20 @@ let currentStream: { stop(): void } | null = null;
 
 export function stopSubstreams(): void {
   stopping = true;
+  setStreamStatus("stopped");
   currentStream?.stop();
 }
 
 export async function startSubstreams(): Promise<void> {
-  if (!API_KEY) throw new Error("SUBSTREAMS_API_KEY is required");
+  if (substreamsDisabled()) {
+    setStreamStatus("disabled", "SUBSTREAMS_ENABLED=false — API-only mode, zero data-plane egress");
+    logger.info("substreams disabled (SUBSTREAMS_ENABLED=false) — API-only mode (no matching, oneshot capture frozen)");
+    return;
+  }
+  if (!API_KEY) {
+    setStreamStatus("degraded", "SUBSTREAMS_API_KEY missing — API-only");
+    throw new Error("SUBSTREAMS_API_KEY is required");
+  }
   // Single-writer lease: claim BEFORE the retry loop. A fresh lease held by another
   // instance throws LeaseHeldError — the entrypoint hard-exits so a supervisor keeps
   // retrying until the dead holder's lease goes stale and this instance takes over.
@@ -409,6 +444,7 @@ export async function startSubstreams(): Promise<void> {
       let blocksSeen = 0;
       const handle = await runStream(state, async (message, cursor, clock) => {
         blocksSeen += 1;
+        if (health.status !== "streaming") setStreamStatus("streaming");
         const matches = await matchTransfers(message, clock);
         for (const e of matches) {
           logger.debug(
@@ -453,16 +489,25 @@ export async function startSubstreams(): Promise<void> {
       const result = await handle.done;
       currentStream = null;
       blocksSeen = result.blocksSeen;
-      backoffMs = 1000;
-      failuresOnCursor = 0;
-      emptyAttempts = blocksSeen > 0 ? 0 : emptyAttempts + 1;
+      if (blocksSeen > 0) {
+        backoffMs = 1000;
+        failuresOnCursor = 0;
+        emptyAttempts = 0;
+      } else {
+        // Connected but nothing delivered — endpoint/auth trouble (the empty-attempt
+        // guard below decides give-up); healthz should show it.
+        emptyAttempts += 1;
+        setStreamStatus("degraded", `attempt ${emptyAttempts}/${MAX_EMPTY_ATTEMPTS} produced no blocks`);
+      }
       if (emptyAttempts >= MAX_EMPTY_ATTEMPTS) {
+        setStreamStatus("degraded", `${MAX_EMPTY_ATTEMPTS} consecutive attempts with no blocks — API-only rethrow`);
         throw new Error(`${MAX_EMPTY_ATTEMPTS} consecutive attempts with no blocks — giving up`);
       }
       logger.info({ blocksSeen }, `stream ended after ${blocksSeen} blocks — retrying in ${backoffMs}ms`);
     } catch (e) {
       currentStream = null;
       if (stopping) return;
+      setStreamStatus("degraded", e instanceof Error ? e.message : String(e));
       emptyAttempts += 1;
       if (resuming) {
         failuresOnCursor += 1;
@@ -477,6 +522,7 @@ export async function startSubstreams(): Promise<void> {
         }
       }
       if (emptyAttempts >= MAX_EMPTY_ATTEMPTS) {
+        setStreamStatus("degraded", `stream unavailable (last error: ${e instanceof Error ? e.message : String(e)}) — API-only`);
         throw e;
       }
       logger.warn({ err: e instanceof Error ? e.message : e }, `stream attempt failed — retrying in ${backoffMs}ms`);
@@ -505,6 +551,10 @@ async function clearCursor() {
 // Standalone entrypoint (`npm run stream`); the Express server calls startSubstreams().
 const isMain = process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url;
 if (isMain) {
+  if (substreamsDisabled()) {
+    logger.error("SUBSTREAMS_ENABLED=false — the standalone stream runner needs the data plane; unset it or use `npm start` (API-only)");
+    process.exit(1);
+  }
   startSubstreams().catch((e) => {
     logger.error({ err: e instanceof Error ? e.message : e }, "substreams manager exited");
     process.exit(1);

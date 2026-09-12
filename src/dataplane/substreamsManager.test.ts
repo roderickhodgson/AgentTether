@@ -5,7 +5,7 @@
  * condition must disable an intent rather than crash the stream.
  */
 import { describe, expect, it } from "vitest";
-import { matchesIntent, type MatchableIntent } from "./substreamsManager.js";
+import { matchesIntent, streamStatus, substreamsDisabled, type MatchableIntent } from "./substreamsManager.js";
 
 const CREATED_AT = new Date("2026-09-05T12:00:00.000Z");
 const TTL = new Date("2026-09-05T12:10:00.000Z"); // 10-minute window
@@ -133,5 +133,32 @@ describe("matchesIntent — wallet watches (generalized selectors)", () => {
 
   it("an intent with neither selector fails closed", () => {
     expect(matchesIntent(intent({ targetContract: null, eventCondition: {} }), transfer(), BLOCK_TIME)).toBe(false);
+  });
+});
+
+describe("stream status + SUBSTREAMS_ENABLED switch", () => {
+  it("the switch parses: unset or 'true' keeps the data plane, 'false' (case/space tolerant) disables it", () => {
+    const was = process.env.SUBSTREAMS_ENABLED;
+    try {
+      delete process.env.SUBSTREAMS_ENABLED;
+      expect(substreamsDisabled()).toBe(false);
+      process.env.SUBSTREAMS_ENABLED = "true";
+      expect(substreamsDisabled()).toBe(false);
+      process.env.SUBSTREAMS_ENABLED = "false";
+      expect(substreamsDisabled()).toBe(true);
+      process.env.SUBSTREAMS_ENABLED = " False ";
+      expect(substreamsDisabled()).toBe(true);
+    } finally {
+      if (was === undefined) delete process.env.SUBSTREAMS_ENABLED;
+      else process.env.SUBSTREAMS_ENABLED = was;
+    }
+  });
+
+  it("healthz exposes the status surface with a detail string (initial state: starting)", () => {
+    const s = streamStatus();
+    expect(s.status).toBe("starting"); // fresh module: no attempt has run yet
+    expect(s.detail).toBeNull();
+    // the full shape the API contract implies for /healthz's stream field
+    expect(Object.keys(s).sort()).toEqual(["detail", "status"]);
   });
 });

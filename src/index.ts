@@ -5,7 +5,7 @@ import { logger } from "./logger.js";
 import { intentsRouter } from "./api/intentsRouter.js";
 import { mountOneshot } from "./api/oneshot.js";
 import { mountReport } from "./api/report.js";
-import { startSubstreams, stopSubstreams } from "./dataplane/substreamsManager.js";
+import { startSubstreams, stopSubstreams, streamStatus } from "./dataplane/substreamsManager.js";
 import { isLeaseHeldError, releaseLease } from "./lease.js";
 import { startSettlementSweeps } from "./cron.js";
 
@@ -25,9 +25,9 @@ mountReport(app);
 app.get("/healthz", async (_req, res) => {
   try {
     await prisma.$queryRaw`SELECT 1`;
-    res.json({ ok: true, db: "up" });
+    res.json({ ok: true, db: "up", stream: streamStatus() });
   } catch {
-    res.status(503).json({ ok: false, db: "down" });
+    res.status(503).json({ ok: false, db: "down", stream: streamStatus() });
   }
 });
 
