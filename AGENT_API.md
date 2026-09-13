@@ -61,7 +61,7 @@ settlement is the blocks processed, pro-rata.
 
 ```json
 { "job_id": "…", "status": "MONITORING", "agent_wallet": "0x…",
-  "events_matched": 0, "ttl_timestamp": "…", "report_url": "https://…/w/<job_id>" }
+  "events_matched": 0, "ttl_timestamp": "…", "report_url": "https://…/report?i=<job_id>" }
 ```
 
 Keep `job_id` and `report_url`. Idempotency: replaying the same voucher (same Permit2
@@ -84,7 +84,7 @@ confirmed on-chain. POSTed to your `webhook_url`, `content-type: application/jso
   "events_matched": 2, "events_truncated": false,
   "events": [{ "chain": "ethereum-mainnet", "block": 0, "block_timestamp": "…",
                "tx_hash": "0x…", "log_index": 0, "from": "0x…", "to": "0x…", "amount_atomic": "…" }],
-  "report_url": "https://…/w/<intent_id>"
+  "report_url": "https://…/report?i=<intent_id>"
 }
 ```
 

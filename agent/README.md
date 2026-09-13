@@ -73,7 +73,7 @@ settled/expired → delivered) with timestamps.
 
 ### The shareable results page
 
-The demo prints `report page: <url>/w/<intent-id>` — a human-readable rendering of the
+The demo prints `report page: <url>/report?i=<intent-id>` (short alias `/w/<intent-id>`) — a human-readable rendering of the
 watch (events table with mainnet explorer links, settlement receipt with the Base
 Sepolia link, the cross-chain disclosure). Served by the backend at `/w/:id`; the same
 page deploys to Netlify (`npx netlify deploy --prod --dir web` from the repo root) and

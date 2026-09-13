@@ -1,6 +1,7 @@
 /**
  * The shareable results page (B.2): every watch gets a URL a human can open —
- * `/w/:intentId` renders the watch, its events, and its settlement; the JSON behind
+ * `report?i=<id>` (short `/w/:id` alias) renders the watch, its events, and its
+ * settlement; the JSON behind
  * it is `GET /api/v1/intents/:id/report` (CORS-open so a hosted static page can
  * fetch it). The agent's demo output links to this page, so an agent user can show
  * a non-technical person exactly what happened.
@@ -161,7 +162,10 @@ export function publicBaseUrl(): string {
 }
 
 export function reportUrlFor(id: string, _base?: string): string {
-  return `${publicBaseUrl()}/w/${id}`;
+  // Canonical form matches the site's own links (web/index.html): the extensionless
+  // /report?i= shape netlify.toml rewrites to report.html. The /w/:id short form
+  // remains a human-friendly alias via the same rewrite — old links keep working.
+  return `${publicBaseUrl()}/report?i=${id}`;
 }
 
 // Public summary rows for the home page's "recent requests" list.

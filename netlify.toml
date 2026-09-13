@@ -1,9 +1,9 @@
 # Netlify config for the AgentTether demo pages.
 # Deploy:  npx netlify deploy --prod --dir web
 # The results page fetches the backend API — when the backend runs locally, open the
-# report through the backend itself (http://localhost:8080/w/:id); a hosted page needs
-# the backend reachable over https (e.g. `cloudflared tunnel --url http://localhost:8080`)
-# and the report link carries `?api=<tunnel-url>`.
+# report through the local netlify dev (http://localhost:8888/w/:id — the rewrite in
+# this file); a hosted page needs the backend reachable over https (e.g. `cloudflared
+# tunnel --url http://localhost:8080`) and the report link carries `?api=<tunnel-url>`.
 
 [build]
   publish = "web"
